@@ -1,0 +1,21 @@
+[Unit]
+Description=TeleSaved AI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/telesaved
+ExecStart=/opt/telesaved/venv/bin/python /opt/telesaved/app.py
+Restart=always
+RestartSec=5
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=TELESAVED_WHISPER_BIN=/opt/telesaved/venv/bin/whisper
+Environment=TELESAVED_WHISPER_DEVICE=cpu
+Environment=TELESAVED_WHISPER_MODEL=tiny
+Environment=TELESAVED_WHISPER_TIMEOUT=3600
+Environment=CUDA_VISIBLE_DEVICES=
+
+[Install]
+WantedBy=multi-user.target

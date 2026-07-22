@@ -1,0 +1,5 @@
+{
+  "api_id": 123456,
+  "api_hash": "replace_with_your_telegram_api_hash",
+  "base_path": "/mnt/rda1/.vault/telesaved"
+}

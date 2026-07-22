@@ -1,0 +1,9 @@
+TeleSaved AI
+Copyright (c) Jamie Villegas.
+
+TeleSaved AI is a human-directed, AI-assisted software project.
+OpenAI ChatGPT assisted with architecture planning, Python/aiohttp backend code, React SPA UI code, feature design, debugging, packaging guidance, systemd/deployment workflows, and UX refinement.
+
+Primary author and project steward: Jamie Villegas.
+
+This project depends on multiple open source components. Preserve upstream notices and license terms when redistributing.
