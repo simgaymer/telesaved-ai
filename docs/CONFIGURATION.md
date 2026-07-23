@@ -1,8 +1,6 @@
 # Configuration
 
-TeleSaved reads `/opt/telesaved/config.json` first. If no file exists, it can also read environment variables.
-
-## config.json
+TeleSaved reads `/opt/telesaved/config.json` by default. The safe template is `config.example.json`.
 
 ```json
 {
@@ -12,58 +10,29 @@ TeleSaved reads `/opt/telesaved/config.json` first. If no file exists, it can al
 }
 ```
 
-## Environment variables
+## Important paths
 
-- `TELESAVED_API_ID`
-- `TELESAVED_API_HASH`
-- `TELESAVED_BASE_PATH`
-- `TELESAVED_WHISPER_BIN`
-- `TELESAVED_WHISPER_DEVICE`
-- `TELESAVED_WHISPER_MODEL`
-- `TELESAVED_WHISPER_TIMEOUT`
+- Application: `/opt/telesaved`
+- Frontend: `/opt/telesaved/frontend/index.html`
+- Local venv: `/opt/telesaved/venv`
+- Default vault/base path: `/mnt/rda1/.vault/telesaved`
+- SQLite metadata database: `telesaved.db`
+- Logs: `telesaved.log`, `whisper.log`
+- Runtime auth/user data: `auth.json`
+- Jobs: `jobs.json`
+- Trash: `trash/`
+- Backups: `backups/`
 
-## Storage paths
+## Environment overrides
 
-Under `base_path`, TeleSaved maintains:
+Useful systemd overrides include:
 
-```text
-telesaved.db
-state.json
-settings.json
-feedback.json
-auth.json
-jobs.json
-telesaved.log
-whisper.log
-frames/
-previews/
-thumbs/
-scenes/
-audio/
-trash/
-backups/
-telegram_metadata/
+```ini
+Environment=TELESAVED_WHISPER_BIN=/opt/telesaved/venv/bin/whisper
+Environment=TELESAVED_WHISPER_DEVICE=cpu
+Environment=TELESAVED_WHISPER_MODEL=tiny
+Environment=TELESAVED_WHISPER_TIMEOUT=3600
+Environment=CUDA_VISIBLE_DEVICES=
 ```
 
-Do not commit these runtime files to Git.
-
-## Telegram setup
-
-Create Telegram API credentials through Telegram's developer portal and place them in `config.json`. The application uses Telethon and stores the Telegram session under `/opt/telesaved`.
-
-## Whisper setup
-
-The recommended deployment points TeleSaved to:
-
-```text
-/opt/telesaved/venv/bin/whisper
-```
-
-The systemd unit sets:
-
-```text
-TELESAVED_WHISPER_DEVICE=cpu
-CUDA_VISIBLE_DEVICES=
-```
-
-This avoids CUDA kernel incompatibilities on older NVIDIA GPUs.
+Keep `config.json`, session files, databases, logs, media, and runtime state out of Git.
