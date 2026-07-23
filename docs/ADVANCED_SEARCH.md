@@ -1,65 +1,29 @@
-# Advanced Granular Search
+# Advanced Search
 
-TeleSaved 4.4.2 replaces the earlier search behavior with hybrid metadata, filename, filter, and semantic search.
+TeleSaved 4.4.2 adds granular search on top of semantic CLIP/FAISS search.
 
-## Searchable fields
+## Supported filters
 
-- Filename and path
+- Filename, path, and prefix matching
 - Exact date and date ranges
 - Duration minimum/maximum
-- File size minimum/maximum
 - Source title or source reference
-- Required tags, any tags, and excluded tags
-- Personal state
+- Required, optional, and excluded tags
+- Personal state: Unreviewed, Watch Next, Keep, Maybe, Delete Candidate, Archived
 - Favorite status
-- Rating range
+- Minimum rating
 - Watched/unwatched
-- Watch-later status
+- Watch later
 - Existing/missing file status
-- Semantic text query through CLIP/FAISS
 
-## Fielded examples
+## Example searches
 
 ```text
-name:document_2026-03-19
-filename:"document_2026-03-19"
+document_2026-03-19
 date:2026-03-19
-source:"Saved Messages"
-duration:>5m
-duration:<30s
-duration_min:1:30 duration_max:10m
-tag:Movie
-anytag:Gay,Female
-exclude:Archived
-state:watch_next
-favorite:true
-rating:4
-watched:false
-watch_later:true
-exists:true
+source:"Saved Messages" duration:>5m
+favorites rating:4
+watch next from March 19 2026
 ```
 
-## Plain-language examples
-
-```text
-videos from March 19 2026
-watch next from Saved Messages
-favorites rated 4 or higher
-unwatched movies over 5 minutes
-files starting with document_2026-03-19
-```
-
-## Sorting
-
-Use the UI sort controls or natural phrases such as:
-
-```text
-largest first
-shortest first
-newest first
-highest rated
-```
-
-## Notes
-
-Advanced search is deterministic and local. It does not call an external LLM to parse the query.
+The backend enforces source access controls before returning library results. Users only see results from sources they are allowed to access.
