@@ -4,7 +4,7 @@ TeleSaved AI is a self-hosted Telegram video archiving, indexing, tagging, revie
 
 It downloads videos from selected Telegram sources, stores them in a local vault, generates thumbnails/previews, applies AI-assisted tagging, supports semantic and granular search, and provides administrative tools for source management, cleanup, duplicates, transcripts, backups, user access control, and library maintenance.
 
-Current packaged version: **4.4.2**.
+Current source version: **4.4.2 — Advanced Granular Search**.
 
 ## Major features
 
@@ -12,6 +12,7 @@ Current packaged version: **4.4.2**.
 - Source Pipelines 2.0 with per-source controls and Telegram metadata preservation.
 - AI-assisted tagging with CLIP and YOLO.
 - FAISS semantic search plus advanced granular metadata search.
+- Search by filename, path, prefix, date/date range, duration, source, tags, personal state, favorite, rating, watched, watch-later, and file status.
 - Thumbnails, hover previews, scene timelines, and video detail pages.
 - Whisper-based audio analysis and timestamped transcript generation.
 - Trash/restore workflow and exact/possible duplicate management.
@@ -24,16 +25,17 @@ Current packaged version: **4.4.2**.
 ## Repository layout
 
 ```text
-app.py                         aiohttp backend and application logic
-frontend/index.html            React single-page application
-build-telesaved-deb.sh          Debian package builder
-config.example.json             safe example configuration without credentials
-requirements.txt                Python dependency list
-install-ldap-deps.sh            helper for LDAP dependency install
-systemd/telesaved.service       venv-based systemd unit example
+app.py                            aiohttp backend and application logic
+frontend/index.html               React single-page application
+build-telesaved-deb.sh             Debian package builder
+config.example.json                safe example configuration without credentials
+requirements.txt                   Python dependency list
+install-ldap-deps.sh               helper for LDAP dependency install
+systemd/telesaved.service          venv-based systemd unit example
 scripts/install-telesaved-venv.sh  zero-touch venv installer for deployed systems
-scripts/repair-whisper-cli.sh   Whisper repair helper, when available
-docs/                          project documentation
+scripts/repair-whisper-cli.sh      Whisper repair helper
+scripts/push-full-source-to-github.sh  live-source sync helper
+docs/                             project documentation
 ```
 
 ## Quick start on Debian/Ubuntu
@@ -85,23 +87,27 @@ TELESAVED_INCLUDE_CONFIG=1 ./build-telesaved-deb.sh
 
 ## Documentation
 
-- [Installation](docs/INSTALL.md)
+Start with:
+
+- [Installation](docs/INSTALLATION.md)
 - [Configuration](docs/CONFIGURATION.md)
-- [Feature overview](docs/FEATURES.md)
-- [Advanced granular search](docs/ADVANCED_SEARCH.md)
-- [User management and RBAC](docs/ACCESS_CONTROL.md)
-- [Administration guide](docs/ADMINISTRATION.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Roadmap](docs/ROADMAP.md)
+- [Advanced Search](docs/ADVANCED_SEARCH.md)
+- [User Management and RBAC](docs/USER_MANAGEMENT.md)
+- [Telegram Sources](docs/TELEGRAM_SOURCES.md)
+- [Audio and Whisper](docs/AUDIO_WHISPER.md)
+- [Packaging](docs/PACKAGING.md)
+- [Source Sync](docs/SOURCE_SYNC.md)
 
-## License and notices
+## Security notice
 
-TeleSaved AI is intended to be released under **AGPL-3.0-or-later** because it is a network-accessible application and currently uses Ultralytics YOLO, which is AGPL-3.0 unless separately licensed.
+Never commit runtime credentials, Telegram session files, user/auth state, databases, logs, downloaded media, generated previews, transcripts, trash, or backups.
 
-This repository contains a license notice. Before broad public redistribution, confirm dependency versions and preserve upstream notices and full license texts.
+See [SECURITY.md](SECURITY.md).
 
-## Authorship
+## Credits
 
-Primary author and product owner: **Jamie Villegas**.
+TeleSaved AI was authored by James "Jamie" Villegas with AI-assisted development support from ChatGPT. It builds on open-source projects including aiohttp, Telethon, PyTorch, OpenAI CLIP, Ultralytics YOLO, FAISS, Pillow, FFmpeg, Whisper, React, Babel, and ldap3.
 
-OpenAI ChatGPT assisted with iterative architecture planning, Python/aiohttp backend code, React SPA UI code, feature design, debugging, packaging guidance, systemd/deployment workflows, and UX refinement. Jamie Villegas directed the application goals, accepted/rejected implementation choices, tested updates, and retains project stewardship.
+## License
+
+AGPL-3.0-only. See [LICENSE](LICENSE).
