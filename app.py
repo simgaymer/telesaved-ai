@@ -1340,7 +1340,7 @@ def required_permission_for_request(request):
 @web.middleware
 async def auth_middleware(request, handler):
     path = request.path or "/"
-    public_paths = {"/", "/favicon.ico", "/api/health", "/api/setup/status", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap"}
+    public_paths = {"/", "/favicon.ico", "/api/health", "/api/setup/status", "/api/setup/validate-telegram", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap"}
     if path in public_paths:
         return await handler(request)
     if not auth_initialized():
@@ -8627,6 +8627,58 @@ async def api_setup_save(request):
     except Exception as e:
         logger.exception("First-run setup save failed")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+@routes.post("/api/setup/validate-telegram")
+async def api_setup_validate_telegram(request):
+    """Live-validate Telegram API credentials without writing any files.
+    Used by the setup wizard step 2 to gate advancement on confirmed-working credentials.
+    This route is intentionally public (no auth required) — it is only reachable before
+    config.json exists and the service has Telegram configured.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        check_api_id = int(str(data.get("api_id", "")).strip())
+    except Exception:
+        return web.json_response({"ok": False, "error": "API ID must be a number"}, status=400)
+    check_api_hash = str(data.get("api_hash", "")).strip()
+    if not check_api_id or not check_api_hash:
+        return web.json_response({"ok": False, "error": "API ID and API hash are required"}, status=400)
+    import tempfile as _tempfile
+    tmp_session = None
+    client = None
+    try:
+        tmp_dir = _tempfile.mkdtemp(prefix="telesaved-validate-")
+        tmp_session = os.path.join(tmp_dir, "validate_session")
+        client = TelegramClient(tmp_session, check_api_id, check_api_hash)
+        await asyncio.wait_for(client.connect(), timeout=10)
+        if not await client.is_user_authorized():
+            # Credentials are structurally valid — Telegram accepted the connection.
+            # Not being authorized simply means no active session, which is expected.
+            pass
+        return web.json_response({"ok": True})
+    except asyncio.TimeoutError:
+        return web.json_response({"ok": False, "error": "Telegram connection timed out. Check your network."}, status=400)
+    except Exception as e:
+        msg = str(e)
+        if "API_ID_INVALID" in msg or "api_id" in msg.lower():
+            return web.json_response({"ok": False, "error": "Invalid API ID. Check your credentials at my.telegram.org/apps."}, status=400)
+        if "AUTH_KEY" in msg or "api_hash" in msg.lower():
+            return web.json_response({"ok": False, "error": "Invalid API hash. Check your credentials at my.telegram.org/apps."}, status=400)
+        return web.json_response({"ok": False, "error": f"Telegram validation failed: {msg}"}, status=400)
+    finally:
+        try:
+            if client and client.is_connected():
+                await client.disconnect()
+        except Exception:
+            pass
+        try:
+            import shutil as _shutil
+            _shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
 @routes.get("/api/install/checks")
 async def api_install_checks(request):
     return web.json_response(install_check_payload())

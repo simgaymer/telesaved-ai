@@ -673,6 +673,218 @@
         flex-direction: column;
       }
     }
+
+    /* ===== SETUP WIZARD ===== */
+    .wizard-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 24px;
+    }
+
+    .wizard-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 480px;
+      padding: 40px 36px 32px;
+      box-shadow: var(--shadow);
+    }
+
+    .wizard-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .wizard-logo-badge {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 20px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .wizard-logo-text {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .wizard-steps {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 28px;
+    }
+
+    .wizard-step-dot {
+      flex: 1;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--panel-2);
+      transition: background 0.2s;
+    }
+
+    .wizard-step-dot.active { background: var(--accent); }
+    .wizard-step-dot.done   { background: var(--success); }
+
+    .wizard-step-label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    .wizard-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .wizard-subtitle {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+
+    .wizard-disclaimer {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+
+    .wizard-field {
+      margin-bottom: 16px;
+    }
+
+    .wizard-field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .wizard-field input {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 14px;
+      padding: 9px 12px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s;
+    }
+
+    .wizard-field input:focus { border-color: var(--accent); }
+    .wizard-field input.error { border-color: var(--danger); }
+
+    .wizard-field-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+
+    .wizard-space-info {
+      font-size: 12px;
+      color: var(--success);
+      margin-top: 5px;
+    }
+
+    .wizard-error {
+      background: rgba(217, 107, 107, 0.12);
+      border: 1px solid var(--danger);
+      border-radius: 6px;
+      color: var(--danger);
+      font-size: 13px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+    }
+
+    .wizard-validation-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      min-height: 24px;
+    }
+
+    .wizard-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: wizard-spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes wizard-spin { to { transform: rotate(360deg); } }
+
+    .wizard-check { color: var(--success); font-size: 16px; }
+
+    .wizard-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+      justify-content: space-between;
+    }
+
+    .wizard-btn {
+      padding: 10px 22px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .wizard-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .wizard-btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .wizard-btn-secondary {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .wizard-restart-note {
+      margin-top: 20px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .wizard-restart-note strong { color: var(--text); }
   </style>
 </head>
 <body>
@@ -1820,21 +2032,319 @@
       );
     }
 
+    const LEGAL_DISCLAIMER =
+      "TeleSaved AI is a personal media archiving tool. Compliance with all applicable " +
+      "laws governing the downloading, possession, and use of content — including copyright, " +
+      "obscenity, and any other relevant statutes in your jurisdiction — is solely the " +
+      "responsibility of the user. The authors and contributors of TeleSaved AI bear no " +
+      "liability for how the software is used or what content is stored with it.";
+
+    function SetupWizard({ onComplete }) {
+      const TOTAL_STEPS = 4;
+      const [step, setStep] = useState(1);
+
+      // Step 2 — credentials
+      const [apiId, setApiId]     = useState("");
+      const [apiHash, setApiHash] = useState("");
+      const [validating, setValidating] = useState(false);
+      const [validated, setValidated]   = useState(false);
+      const [credError, setCredError]   = useState("");
+
+      // Step 3 — vault path
+      const [basePath, setBasePath] = useState("/mnt/data/telesaved");
+      const [spaceInfo, setSpaceInfo] = useState("");
+      const [pathError, setPathError] = useState("");
+
+      // Step 4 — admin account
+      const [username, setUsername]   = useState("");
+      const [password, setPassword]   = useState("");
+      const [password2, setPassword2] = useState("");
+      const [accountError, setAccountError] = useState("");
+      const [saving, setSaving] = useState(false);
+      const [done, setDone] = useState(false);
+
+      function stepDot(n) {
+        if (n < step)  return "wizard-step-dot done";
+        if (n === step) return "wizard-step-dot active";
+        return "wizard-step-dot";
+      }
+
+      // ── Step 2: live Telegram validation ──────────────────────────────────
+      async function validateTelegram() {
+        setCredError("");
+        setValidated(false);
+        if (!apiId || !apiHash) { setCredError("Both fields are required."); return; }
+        setValidating(true);
+        try {
+          await api("/api/setup/validate-telegram", {
+            method: "POST",
+            body: JSON.stringify({ api_id: parseInt(apiId, 10), api_hash: apiHash }),
+          });
+          setValidated(true);
+          setTimeout(() => setStep(3), 600);
+        } catch (e) {
+          setCredError(e.message || "Validation failed.");
+        } finally {
+          setValidating(false);
+        }
+      }
+
+      // ── Step 3: path writability check ────────────────────────────────────
+      async function checkPath() {
+        setPathError("");
+        setSpaceInfo("");
+        if (!basePath.trim()) { setPathError("Path is required."); return; }
+        try {
+          const res = await api(`/api/setup/status`);
+          // Backend already validated the config; we just advance.
+          // A simple HEAD on the path is unavailable pre-config, so we rely on
+          // the save step to catch non-writable paths and surface the error.
+          setSpaceInfo("Path accepted — writability confirmed on save.");
+          setStep(4);
+        } catch (e) {
+          setPathError("Could not reach the server. Check the service is running.");
+        }
+      }
+
+      // ── Step 4: save config + bootstrap admin ─────────────────────────────
+      async function finish() {
+        setAccountError("");
+        if (!username.trim()) { setAccountError("Username is required."); return; }
+        if (password.length < 8) { setAccountError("Password must be at least 8 characters."); return; }
+        if (password !== password2) { setAccountError("Passwords do not match."); return; }
+        setSaving(true);
+        try {
+          await api("/api/setup/save", {
+            method: "POST",
+            body: JSON.stringify({ api_id: parseInt(apiId, 10), api_hash: apiHash, base_path: basePath }),
+          });
+          await api("/api/auth/bootstrap", {
+            method: "POST",
+            body: JSON.stringify({ username: username.trim(), password, display_name: "TeleSaved Administrator" }),
+          });
+          setDone(true);
+        } catch (e) {
+          setAccountError(e.message || "Setup failed.");
+          setSaving(false);
+        }
+      }
+
+      // ── Done screen ───────────────────────────────────────────────────────
+      if (done) {
+        return (
+          <div className="wizard-overlay">
+            <div className="wizard-card">
+              <div className="wizard-logo">
+                <div className="wizard-logo-badge">T</div>
+                <div className="wizard-logo-text">TeleSaved AI</div>
+              </div>
+              <div className="wizard-title">Setup complete ✓</div>
+              <div className="wizard-restart-note">
+                <strong>One more step:</strong> restart the service so Telegram sync activates.<br /><br />
+                <code>sudo systemctl restart telesaved</code><br /><br />
+                Then reload this page to open your library.
+              </div>
+              <div className="wizard-actions" style={{justifyContent:"flex-end"}}>
+                <button className="wizard-btn wizard-btn-primary" onClick={() => window.location.reload()}>
+                  Reload
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="wizard-overlay">
+          <div className="wizard-card">
+
+            {/* Logo */}
+            <div className="wizard-logo">
+              <div className="wizard-logo-badge">T</div>
+              <div className="wizard-logo-text">TeleSaved AI</div>
+            </div>
+
+            {/* Step progress dots */}
+            <div className="wizard-steps">
+              {[1,2,3,4].map(n => <div key={n} className={stepDot(n)} />)}
+            </div>
+            <div className="wizard-step-label">Step {step} of {TOTAL_STEPS}</div>
+
+            {/* ── Step 1: Welcome ── */}
+            {step === 1 && (
+              <>
+                <div className="wizard-title">Welcome to TeleSaved AI</div>
+                <div className="wizard-subtitle">
+                  Let's get your personal Telegram media vault set up. This will take less than 5 minutes.
+                </div>
+                <div className="wizard-disclaimer">{LEGAL_DISCLAIMER}</div>
+                <div className="wizard-actions" style={{justifyContent:"flex-end"}}>
+                  <button className="wizard-btn wizard-btn-primary" onClick={() => setStep(2)}>
+                    Get Started →
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ── Step 2: Telegram Credentials ── */}
+            {step === 2 && (
+              <>
+                <div className="wizard-title">Telegram Credentials</div>
+                <div className="wizard-subtitle">
+                  Get your API ID and hash from{" "}
+                  <a href="https://my.telegram.org/apps" target="_blank" rel="noopener noreferrer"
+                     style={{color:"var(--accent)"}}>my.telegram.org/apps</a>.
+                </div>
+
+                {credError && <div className="wizard-error">{credError}</div>}
+
+                <div className="wizard-field">
+                  <label>API ID</label>
+                  <input
+                    type="number"
+                    value={apiId}
+                    onChange={e => { setApiId(e.target.value); setValidated(false); }}
+                    className={credError ? "error" : ""}
+                    placeholder="e.g. 1234567"
+                    disabled={validating}
+                  />
+                </div>
+
+                <div className="wizard-field">
+                  <label>API Hash</label>
+                  <input
+                    type="text"
+                    value={apiHash}
+                    onChange={e => { setApiHash(e.target.value); setValidated(false); }}
+                    className={credError ? "error" : ""}
+                    placeholder="32-character hex string"
+                    disabled={validating}
+                  />
+                </div>
+
+                <div className="wizard-validation-row">
+                  {validating && <><div className="wizard-spinner" /><span style={{fontSize:13,color:"var(--muted)"}}>Connecting to Telegram…</span></>}
+                  {validated && !validating && <><span className="wizard-check">✓</span><span style={{fontSize:13,color:"var(--success)"}}>Credentials verified</span></>}
+                </div>
+
+                <div className="wizard-actions">
+                  <button className="wizard-btn wizard-btn-secondary" onClick={() => setStep(1)} disabled={validating}>← Back</button>
+                  <button className="wizard-btn wizard-btn-primary" onClick={validateTelegram} disabled={validating || validated}>
+                    {validating ? "Validating…" : "Validate & Continue →"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ── Step 3: Vault Path ── */}
+            {step === 3 && (
+              <>
+                <div className="wizard-title">Storage Location</div>
+                <div className="wizard-subtitle">
+                  Where should TeleSaved store your media, database, thumbnails, and transcripts?
+                </div>
+
+                {pathError && <div className="wizard-error">{pathError}</div>}
+
+                <div className="wizard-field">
+                  <label>Vault Path</label>
+                  <input
+                    type="text"
+                    value={basePath}
+                    onChange={e => { setBasePath(e.target.value); setSpaceInfo(""); }}
+                    placeholder="/mnt/data/telesaved"
+                  />
+                  {spaceInfo && <div className="wizard-space-info">{spaceInfo}</div>}
+                  <div className="wizard-field-hint">Choose a location with plenty of free space. Videos can be large.</div>
+                </div>
+
+                <div className="wizard-actions">
+                  <button className="wizard-btn wizard-btn-secondary" onClick={() => setStep(2)}>← Back</button>
+                  <button className="wizard-btn wizard-btn-primary" onClick={checkPath}>Continue →</button>
+                </div>
+              </>
+            )}
+
+            {/* ── Step 4: Admin Account ── */}
+            {step === 4 && (
+              <>
+                <div className="wizard-title">Create Admin Account</div>
+                <div className="wizard-subtitle">
+                  This is your local administrator login. Keep it safe — you'll need it to manage TeleSaved.
+                </div>
+
+                {accountError && <div className="wizard-error">{accountError}</div>}
+
+                <div className="wizard-field">
+                  <label>Username</label>
+                  <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin" disabled={saving} />
+                </div>
+                <div className="wizard-field">
+                  <label>Password</label>
+                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min. 8 characters" disabled={saving} />
+                </div>
+                <div className="wizard-field">
+                  <label>Confirm Password</label>
+                  <input type="password" value={password2} onChange={e => setPassword2(e.target.value)} placeholder="Repeat password" disabled={saving} />
+                </div>
+
+                <div className="wizard-actions">
+                  <button className="wizard-btn wizard-btn-secondary" onClick={() => setStep(3)} disabled={saving}>← Back</button>
+                  <button className="wizard-btn wizard-btn-primary" onClick={finish} disabled={saving}>
+                    {saving ? "Setting up…" : "Finish Setup →"}
+                  </button>
+                </div>
+              </>
+            )}
+
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const [view, setView] = useState("library");
       const [adminTab, setAdminTab] = useState("dashboard");
       const [flash, setFlash] = useState("");
       const [tagsList, setTagsList] = useState([]);
+      const [appReady, setAppReady] = useState(false);
+      const [needsSetup, setNeedsSetup] = useState(false);
 
       useEffect(() => {
-        api("/api/tags").then(res => setTagsList(res.tags || [])).catch(() => {});
+        // Check whether first-run setup or auth bootstrap is needed.
+        api("/api/health")
+          .then(res => {
+            if (res.setup_required) {
+              setNeedsSetup(true);
+            } else {
+              setAppReady(true);
+            }
+          })
+          .catch(() => setAppReady(true)); // If health check fails, show app anyway.
       }, []);
+
+      useEffect(() => {
+        if (!appReady) return;
+        api("/api/tags").then(res => setTagsList(res.tags || [])).catch(() => {});
+      }, [appReady]);
 
       useEffect(() => {
         if (!flash) return;
         const id = setTimeout(() => setFlash(""), 4000);
         return () => clearTimeout(id);
       }, [flash]);
+
+      if (needsSetup) {
+        return <SetupWizard onComplete={() => { setNeedsSetup(false); setAppReady(true); }} />;
+      }
+
+      if (!appReady) {
+        return (
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"var(--muted)",fontSize:14}}>
+            Loading…
+          </div>
+        );
+      }
 
       return (
         <div className="app">
