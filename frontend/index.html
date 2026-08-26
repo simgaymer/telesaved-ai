@@ -1,17 +1,1864 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TeleSaved AI — Frontend Recovery</title>
+  <meta charset="utf-8" />
+  <title>TeleSaved AI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.55; }
-    code { background: #eee; padding: .15rem .35rem; border-radius: .25rem; }
+    :root {
+      --bg: #0e1621;
+      --panel: #17212b;
+      --panel-2: #1f2c3a;
+      --border: rgba(255,255,255,0.08);
+      --text: #e9edf0;
+      --muted: #8fa3b5;
+      --accent: #2ea6ff;
+      --accent-2: #1c93e3;
+      --chip: #223242;
+      --shadow: 0 12px 30px rgba(0,0,0,0.28);
+      --danger: #d96b6b;
+      --success: #49b675;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body, #root {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+    }
+
+    .sidebar {
+      width: 260px;
+      background: rgba(14,22,33,0.95);
+      border-right: 1px solid var(--border);
+      padding: 20px 16px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .brand-badge {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      box-shadow: var(--shadow);
+    }
+
+    .brand-title {
+      font-weight: 800;
+      font-size: 1.1rem;
+    }
+
+    .brand-sub {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .nav-btn, .subnav-btn {
+      border: 1px solid var(--border);
+      background: var(--chip);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .nav-btn.active, .subnav-btn.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+      color: white;
+    }
+
+    .subnav {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(14,22,33,0.92);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      padding: 18px 20px 14px;
+    }
+
+    .search-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .search-form {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.7fr) 160px 120px 120px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .field, .select, .btn {
+      height: 46px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      outline: none;
+      font-size: 0.96rem;
+      min-width: 0;
+    }
+
+    .field, .select {
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 0 14px;
+    }
+
+    .btn {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      padding: 0 14px;
+    }
+
+    .btn.secondary {
+      background: var(--chip);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn.danger, .action-btn.danger {
+      background: rgba(217,107,107,0.16);
+      color: #ffc2c2;
+      border: 1px solid rgba(217,107,107,0.35);
+    }
+
+    .controls-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .selection-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .toolbar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 14px;
+      margin-bottom: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .storage-bar {
+      width: 100%;
+      height: 14px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      margin: 10px 0;
+    }
+
+    .storage-fill {
+      height: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    }
+
+    .storage-fill.low {
+      background: linear-gradient(135deg, #d96b6b, #b94a4a);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(73,182,117,0.12);
+      color: #9be0b6;
+      border: 1px solid rgba(73,182,117,0.2);
+      font-size: 0.84rem;
+    }
+
+    .status-pill.paused {
+      background: rgba(217,107,107,0.14);
+      color: #ffc2c2;
+      border-color: rgba(217,107,107,0.25);
+    }
+
+    .content {
+      padding: 20px;
+    }
+
+    .stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 16px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .section-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin: 18px 0 16px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .flash {
+      background: rgba(73,182,117,0.12);
+      border: 1px solid rgba(73,182,117,0.2);
+      color: #9be0b6;
+      padding: 12px 14px;
+      border-radius: 14px;
+      margin-bottom: 16px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .card-body {
+      padding: 14px;
+    }
+
+    .preview-wrap {
+      background: #0b1118;
+      aspect-ratio: 16 / 10;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .preview-img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      background: #0b1118;
+    }
+
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+      margin-bottom: 10px;
+    }
+
+    .file-title {
+      font-weight: 700;
+      line-height: 1.3;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .file-date {
+      color: var(--muted);
+      font-size: 0.84rem;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .tag-row, .score-row, .metric-row, .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .badge {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(46,166,255,0.12);
+      color: #8fcbff;
+      font-size: 0.82rem;
+      border: 1px solid rgba(46,166,255,0.18);
+      white-space: nowrap;
+    }
+
+    .mini-badge {
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      font-size: 0.78rem;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .metric {
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: rgba(73,182,117,0.12);
+      color: #9be0b6;
+      font-size: 0.82rem;
+      border: 1px solid rgba(73,182,117,0.2);
+      white-space: nowrap;
+    }
+
+    .metric.override {
+      background: rgba(217,107,107,0.14);
+      color: #ffc2c2;
+      border: 1px solid rgba(217,107,107,0.25);
+    }
+
+    .action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      min-width: 112px;
+      max-width: 100%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      margin-bottom: 18px;
+    }
+
+    .settings-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .settings-table th,
+    .settings-table td {
+      text-align: left;
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .settings-table th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .label {
+      display: block;
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .pagination {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 18px 0 10px;
+    }
+
+    .page-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 42px;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 12px;
+      background: var(--chip);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.9rem;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .page-btn.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+      color: white;
+    }
+
+    .progress {
+      width: 100%;
+      height: 12px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      margin-top: 10px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 100;
+    }
+
+    .modal {
+      width: min(900px, 100%);
+      max-height: 90vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+
+    .tag-editor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+
+    .tag-check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+
+    .log-box {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      background: rgba(0,0,0,0.2);
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      max-height: 420px;
+      overflow: auto;
+    }
+
+    .empty-state, .error-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px;
+    }
+
+
+
+    .view-toggle {
+      display: inline-flex;
+      gap: 6px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 5px;
+    }
+
+    .view-toggle button {
+      height: 36px;
+      border: 0;
+      border-radius: 10px;
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .view-toggle button.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+    }
+
+    .list-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: auto;
+      box-shadow: var(--shadow);
+    }
+
+    .library-table {
+      width: 100%;
+      min-width: 1040px;
+      border-collapse: collapse;
+    }
+
+    .library-table th,
+    .library-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .library-table th {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .list-file-cell {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 360px;
+    }
+
+    .list-thumb {
+      width: 96px;
+      height: 58px;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #0b1118;
+      flex: 0 0 auto;
+    }
+
+    .path-small {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      max-width: 520px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .source-option {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .source-kind {
+      color: var(--muted);
+      font-size: 0.78rem;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+        height: auto;
+        position: static;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .search-form {
+        grid-template-columns: 1fr;
+      }
+
+      .title-row {
+        flex-direction: column;
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>TeleSaved AI</h1>
-  <p>The exact current frontend is stored in <code>.source-recovery/index.html.gz</code>.</p>
-  <p>Starting <code>app.py</code> verifies and materializes it here automatically. Developers may instead run <code>python3 tools/materialize-recovered-source.py</code> once after cloning.</p>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useState } = React;
+
+    async function api(url, options = {}) {
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+      const body = contentType.includes("application/json") ? await res.json() : await res.text();
+
+      if (!res.ok) {
+        throw new Error(body?.error || body || "Request failed");
+      }
+      return body;
+    }
+
+    function useInterval(callback, delay) {
+      useEffect(() => {
+        if (delay == null) return;
+        const id = setInterval(callback, delay);
+        return () => clearInterval(id);
+      }, [callback, delay]);
+    }
+
+    function Sidebar({ view, setView, adminTab, setAdminTab }) {
+      return (
+        <div className="sidebar">
+          <div className="brand">
+            <div className="brand-badge">T</div>
+            <div>
+              <div className="brand-title">TeleSaved AI</div>
+              <div className="brand-sub">React SPA</div>
+            </div>
+          </div>
+
+          <div className="nav">
+            <button className={`nav-btn ${view === "library" ? "active" : ""}`} onClick={() => setView("library")}>Library</button>
+            <button className={`nav-btn ${view === "downloads" ? "active" : ""}`} onClick={() => setView("downloads")}>Downloads</button>
+            <button className={`nav-btn ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}>Administration</button>
+          </div>
+
+          {view === "admin" && (
+            <div className="subnav">
+              <button className={`subnav-btn ${adminTab === "dashboard" ? "active" : ""}`} onClick={() => setAdminTab("dashboard")}>Dashboard</button>
+              <button className={`subnav-btn ${adminTab === "system" ? "active" : ""}`} onClick={() => setAdminTab("system")}>System</button>
+              <button className={`subnav-btn ${adminTab === "scoring" ? "active" : ""}`} onClick={() => setAdminTab("scoring")}>Scoring</button>
+              <button className={`subnav-btn ${adminTab === "sources" ? "active" : ""}`} onClick={() => setAdminTab("sources")}>Sources</button>
+              <button className={`subnav-btn ${adminTab === "logs" ? "active" : ""}`} onClick={() => setAdminTab("logs")}>Logs & Feedback</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Card({ item, onEdit, selected, onSelect, onDelete }) {
+      const [src, setSrc] = useState(item.thumb_url);
+
+      return (
+        <div className="card">
+          <div className="preview-wrap">
+            <img
+              className="preview-img"
+              src={src}
+              loading="lazy"
+              onMouseEnter={() => setSrc(item.preview_url)}
+              onMouseLeave={() => setSrc(item.thumb_url)}
+              onError={() => setSrc(item.thumb_url)}
+              alt={item.filename}
+            />
+          </div>
+          <div className="card-body">
+            <label className="selection-row">
+              <input type="checkbox" checked={selected} onChange={() => onSelect(item.path)} />
+              <span>{selected ? "Selected" : "Select"}</span>
+            </label>
+
+            <div className="title-row">
+              <div className="file-title">{item.filename}</div>
+              <div className="file-date">{item.date}</div>
+            </div>
+
+            <div className="path-small">{item.path}</div>
+
+            <div className="tag-row">
+              {item.tags?.length ? item.tags.map(t => <span key={t} className="badge">{t}</span>) : <span className="muted">No tags</span>}
+            </div>
+
+            <div className="metric-row">
+              <span className="metric">{item.size_human || "0 B"}</span>
+              {!item.exists && <span className="metric override">Missing File</span>}
+              {item.final_score != null && <span className="metric">Final {item.final_score.toFixed(3)}</span>}
+              {item.semantic_score != null && <span className="metric">Semantic {item.semantic_score.toFixed(3)}</span>}
+              {item.manual_override && <span className="metric override">Manual Override</span>}
+            </div>
+
+            <div className="score-row">
+              {Object.entries(item.score_map || {})
+                .sort((a,b) => b[1]-a[1])
+                .slice(0, 4)
+                .map(([k,v]) => <span key={k} className="mini-badge">{k} {Number(v).toFixed(2)}</span>)}
+            </div>
+
+            <div className="action-row">
+              <a className="action-btn" href={item.file_url} target="_blank" rel="noreferrer">Open File</a>
+              <button className="action-btn" onClick={() => onEdit(item.path)}>Edit / Rename</button>
+              <button className="action-btn danger" onClick={() => onDelete(item.path)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ListRow({ item, onEdit, selected, onSelect, onDelete }) {
+      const [src, setSrc] = useState(item.thumb_url);
+      const score = item.final_score != null ? item.final_score.toFixed(3) : "—";
+
+      return (
+        <tr>
+          <td><input type="checkbox" checked={selected} onChange={() => onSelect(item.path)} /></td>
+          <td>
+            <div className="list-file-cell">
+              <img
+                className="list-thumb"
+                src={src}
+                loading="lazy"
+                onMouseEnter={() => setSrc(item.preview_url)}
+                onMouseLeave={() => setSrc(item.thumb_url)}
+                onError={() => setSrc(item.thumb_url)}
+                alt={item.filename}
+              />
+              <div>
+                <div className="file-title">{item.filename}</div>
+                <div className="path-small">{item.path}</div>
+              </div>
+            </div>
+          </td>
+          <td>{item.size_human || "0 B"}</td>
+          <td>{item.date}</td>
+          <td>{item.tags?.length ? item.tags.map(t => <span key={t} className="badge">{t}</span>) : <span className="muted">—</span>}</td>
+          <td>{score}</td>
+          <td>{item.manual_override ? <span className="metric override">Override</span> : <span className="muted">No</span>}</td>
+          <td>
+            <div className="action-row" style={{marginTop: 0}}>
+              <a className="action-btn" href={item.file_url} target="_blank" rel="noreferrer">Open</a>
+              <button className="action-btn" onClick={() => onEdit(item.path)}>Edit</button>
+              <button className="action-btn danger" onClick={() => onDelete(item.path)}>Delete</button>
+            </div>
+          </td>
+        </tr>
+      );
+    }
+
+    function Pagination({ page, totalPages, onChange }) {
+      if (totalPages <= 1) return null;
+
+      const buttons = [];
+      const start = Math.max(1, page - 2);
+      const end = Math.min(totalPages, page + 2);
+
+      if (page > 1) {
+        buttons.push(<button key="first" className="page-btn" onClick={() => onChange(1)}>First</button>);
+        buttons.push(<button key="prev" className="page-btn" onClick={() => onChange(page - 1)}>Prev</button>);
+      }
+
+      for (let p = start; p <= end; p++) {
+        buttons.push(
+          <button key={p} className={`page-btn ${page === p ? "active" : ""}`} onClick={() => onChange(p)}>
+            {p}
+          </button>
+        );
+      }
+
+      if (page < totalPages) {
+        buttons.push(<button key="next" className="page-btn" onClick={() => onChange(page + 1)}>Next</button>);
+        buttons.push(<button key="last" className="page-btn" onClick={() => onChange(totalPages)}>Last</button>);
+      }
+
+      return <div className="pagination">{buttons}</div>;
+    }
+
+    function EditModal({ path, tagsList, onClose, onSaved }) {
+      const [loading, setLoading] = useState(true);
+      const [item, setItem] = useState(null);
+      const [selected, setSelected] = useState([]);
+      const [renameValue, setRenameValue] = useState("");
+      const [error, setError] = useState("");
+
+      async function load() {
+        setLoading(true);
+        setError("");
+        try {
+          const data = await api(`/api/item/${encodeURIComponent(path)}`);
+          setItem(data);
+          setSelected(data.effective_tags || []);
+          setRenameValue(data.filename || "");
+        } catch (e) {
+          // Keep this page usable even if an older backend is still running
+          // or Telegram refuses to enumerate dialogs. Manual sources can
+          // still be entered, and Saved Messages is always safe to show.
+          setSources(prev => prev && prev.length ? prev : ["me"]);
+          setDialogs([{ id: "me", ref: "me", title: "Saved Messages", username: null, kind: "saved" }]);
+          setError("Dialog enumeration is unavailable from the backend right now. Saved Messages and manual source entry still work after installing the matching app.py.");
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      useEffect(() => { load(); }, [path]);
+
+      function toggle(tag) {
+        setSelected(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+      }
+
+      async function save() {
+        try {
+          await api(`/api/item/${encodeURIComponent(path)}/tags`, {
+            method: "POST",
+            body: JSON.stringify({ tags: selected })
+          });
+          onSaved("Manual tags saved");
+        } catch (e) {
+          setError(e.message);
+        }
+      }
+
+      async function renameFile() {
+        if (!renameValue.trim()) {
+          setError("Filename cannot be blank");
+          return;
+        }
+        try {
+          const res = await api(`/api/item/${encodeURIComponent(path)}/rename`, {
+            method: "POST",
+            body: JSON.stringify({ filename: renameValue })
+          });
+          onSaved(res.result?.renamed ? "Video renamed and filename updated" : "Filename unchanged");
+        } catch (e) {
+          setError(e.message);
+        }
+      }
+
+      async function clearOverride() {
+        try {
+          await api(`/api/item/${encodeURIComponent(path)}/tags/clear`, { method: "POST" });
+          onSaved("Manual override cleared");
+        } catch (e) {
+          setError(e.message);
+        }
+      }
+
+      async function reprocess() {
+        try {
+          await api(`/api/item/${encodeURIComponent(path)}/reprocess`, { method: "POST" });
+          onSaved("File reprocessed");
+        } catch (e) {
+          setError(e.message);
+        }
+      }
+
+      return (
+        <div className="modal-backdrop" onClick={onClose}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-title">Edit / Rename Video</div>
+
+            {error && <div className="flash" style={{background:"rgba(217,107,107,0.14)", color:"#ffc2c2", borderColor:"rgba(217,107,107,0.25)"}}>{error}</div>}
+
+            {loading ? (
+              <div className="muted">Loading…</div>
+            ) : item && (
+              <>
+                <div className="preview-wrap" style={{borderRadius:"16px", marginBottom:"16px"}}>
+                  <img
+                    className="preview-img"
+                    src={item.thumb_url}
+                    onMouseEnter={(e) => e.currentTarget.src = item.preview_url}
+                    onMouseLeave={(e) => e.currentTarget.src = item.thumb_url}
+                    onError={(e) => e.currentTarget.src = item.thumb_url}
+                    alt={item.filename}
+                  />
+                </div>
+
+                <div className="panel">
+                  <div className="section-title">Rename Video</div>
+                  <label className="label">Video name / filename</label>
+                  <input className="field" value={renameValue} onChange={e => setRenameValue(e.target.value)} />
+                  <div className="muted" style={{marginTop:"8px"}}>Current path: {item.path}</div>
+                  <div className="controls-row">
+                    <button className="btn" onClick={renameFile}>Rename Video</button>
+                  </div>
+                </div>
+
+                <div className="muted" style={{marginBottom:"8px"}}>File: {item.path}</div>
+                <div className="muted" style={{marginBottom:"8px"}}>Size: {item.size_human || "0 B"}</div>
+                <div className="muted" style={{marginBottom:"12px"}}>Duration: {Number(item.duration || 0).toFixed(2)}s</div>
+
+                <div className="action-row" style={{marginBottom:"16px"}}>
+                  <a className="action-btn" href={item.file_url} target="_blank" rel="noreferrer">Open File</a>
+                  <button className="action-btn" onClick={reprocess}>Reprocess</button>
+                </div>
+
+                <div className="section-title">Tags</div>
+                <div className="tag-editor-grid">
+                  {tagsList.map(tag => (
+                    <label key={tag} className="tag-check">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(tag)}
+                        onChange={() => toggle(tag)}
+                      />
+                      <span>{tag}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="controls-row">
+                  <button className="btn" onClick={save}>Save Manual Tags</button>
+                  <button className="btn secondary" onClick={clearOverride}>Clear Manual Override</button>
+                  <button className="btn secondary" onClick={onClose}>Close</button>
+                </div>
+
+                <div className="panel" style={{marginTop:"18px"}}>
+                  <div className="section-title">Scoring Detail</div>
+                  <div className="muted">
+                    {Object.entries(item.score_map || {}).sort((a,b) => b[1]-a[1]).map(([k,v]) => `${k}: ${Number(v).toFixed(2)}`).join(" • ")}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function LibraryPage({ flash, setFlash, tagsList }) {
+      const [q, setQ] = useState("");
+      const [tag, setTag] = useState("");
+      const [min, setMin] = useState("0");
+      const [page, setPage] = useState(1);
+      const [viewMode, setViewMode] = useState(() => localStorage.getItem("telesaved_view_mode") || "grid");
+      const [data, setData] = useState({ items: [], page: 1, total_pages: 1, total_items: 0 });
+      const [loading, setLoading] = useState(true);
+      const [editPath, setEditPath] = useState(null);
+      const [selected, setSelected] = useState([]);
+      const [deleteTag, setDeleteTag] = useState("");
+
+      async function load() {
+        setLoading(true);
+        try {
+          const res = await api(`/api/library?q=${encodeURIComponent(q)}&tag=${encodeURIComponent(tag)}&min=${encodeURIComponent(min)}&page=${page}`);
+          setData(res);
+        } catch (e) {
+          setFlash(e.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      useEffect(() => { load(); }, [page]);
+      useEffect(() => { setPage(1); setSelected([]); }, [q, tag, min]);
+      useEffect(() => { localStorage.setItem("telesaved_view_mode", viewMode); }, [viewMode]);
+
+      function doSearch(e) {
+        e.preventDefault();
+        setPage(1);
+        setSelected([]);
+        load();
+      }
+
+      function toggleSelected(path) {
+        setSelected(prev => prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]);
+      }
+
+      function selectAllVisible() {
+        const visible = data.items.map(item => item.path);
+        const allSelected = visible.length && visible.every(path => selected.includes(path));
+        setSelected(allSelected ? selected.filter(path => !visible.includes(path)) : Array.from(new Set([...selected, ...visible])));
+      }
+
+      async function deleteOne(path) {
+        if (!confirm(`Delete this video and its previews?\n\n${path}`)) return;
+        try {
+          await api(`/api/item/${encodeURIComponent(path)}`, { method: "DELETE" });
+          setFlash("Video deleted");
+          setSelected(prev => prev.filter(p => p !== path));
+          load();
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      async function deleteSelected() {
+        if (!selected.length) {
+          setFlash("No videos selected");
+          return;
+        }
+        if (!confirm(`Delete ${selected.length} selected video(s)? This cannot be undone.`)) return;
+        try {
+          const res = await api("/api/delete-bulk", {
+            method: "POST",
+            body: JSON.stringify({ paths: selected })
+          });
+          setFlash(`Deleted ${res.deleted} video(s). Failed: ${res.failed?.length || 0}`);
+          setSelected([]);
+          load();
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      async function deleteByTag() {
+        if (!deleteTag) {
+          setFlash("Choose a tag first");
+          return;
+        }
+        if (!confirm(`Delete ALL videos tagged ${deleteTag}? This cannot be undone.`)) return;
+        try {
+          const res = await api("/api/delete-tag", {
+            method: "POST",
+            body: JSON.stringify({ tag: deleteTag })
+          });
+          setFlash(`Deleted ${res.deleted} video(s) tagged ${deleteTag}. Failed: ${res.failed?.length || 0}`);
+          setSelected([]);
+          load();
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      const visiblePaths = data.items.map(item => item.path);
+      const allVisibleSelected = visiblePaths.length && visiblePaths.every(path => selected.includes(path));
+
+      return (
+        <>
+          <div className="topbar">
+            <div className="search-panel">
+              <form className="search-form" onSubmit={doSearch}>
+                <input className="field" value={q} onChange={e => setQ(e.target.value)} placeholder="Search with natural language…" />
+                <select className="select" value={tag} onChange={e => setTag(e.target.value)}>
+                  <option value="">All tags</option>
+                  {tagsList.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input className="field" value={min} onChange={e => setMin(e.target.value)} placeholder="Min score" />
+                <button className="btn" type="submit">Search</button>
+              </form>
+              <div className="action-row" style={{marginTop:"12px", justifyContent:"space-between"}}>
+                <button className="btn secondary" onClick={() => { setQ(""); setTag(""); setMin("0"); setPage(1); setSelected([]); }}>Clear Filters</button>
+                <div className="view-toggle">
+                  <button className={viewMode === "grid" ? "active" : ""} onClick={() => setViewMode("grid")}>Grid</button>
+                  <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>Detailed List</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="content">
+            {flash && <div className="flash">{flash}</div>}
+
+            <div className="stats">
+              <div className="stat">Results: <strong>{data.total_items}</strong></div>
+              <div className="stat">Page: <strong>{data.page}</strong> / <strong>{data.total_pages}</strong></div>
+              <div className="stat">Tag: <strong>{tag || "All"}</strong></div>
+              <div className="stat">Selected: <strong>{selected.length}</strong></div>
+              <div className="stat">View: <strong>{viewMode === "list" ? "Detailed List" : "Grid"}</strong></div>
+            </div>
+
+            <div className="toolbar">
+              <div className="controls-row">
+                <button className="btn secondary" onClick={selectAllVisible}>{allVisibleSelected ? "Unselect Visible" : "Select Visible"}</button>
+                <button className="btn danger" onClick={deleteSelected}>Delete Selected</button>
+                <select className="select" value={deleteTag} onChange={e => setDeleteTag(e.target.value)}>
+                  <option value="">Delete by tag…</option>
+                  {tagsList.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <button className="btn danger" onClick={deleteByTag}>Delete Tag Group</button>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="muted">Loading…</div>
+            ) : data.items.length ? (
+              <>
+                <div className="section-title">{q ? `Results for "${q}"` : "Library"}</div>
+                <div className="muted">Showing page {data.page} of {data.total_pages} • {data.total_items} total items</div>
+                <Pagination page={data.page} totalPages={data.total_pages} onChange={setPage} />
+
+                {viewMode === "list" ? (
+                  <div className="list-wrap">
+                    <table className="library-table">
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>Video</th>
+                          <th>Size</th>
+                          <th>Date</th>
+                          <th>Tags</th>
+                          <th>Score</th>
+                          <th>Manual</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.items.map(item => (
+                          <ListRow
+                            key={item.path}
+                            item={item}
+                            onEdit={setEditPath}
+                            selected={selected.includes(item.path)}
+                            onSelect={toggleSelected}
+                            onDelete={deleteOne}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="grid">
+                    {data.items.map(item => (
+                      <Card
+                        key={item.path}
+                        item={item}
+                        onEdit={setEditPath}
+                        selected={selected.includes(item.path)}
+                        onSelect={toggleSelected}
+                        onDelete={deleteOne}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <Pagination page={data.page} totalPages={data.total_pages} onChange={setPage} />
+              </>
+            ) : (
+              <div className="empty-state">
+                <div className="section-title">No matching files</div>
+                <div className="muted">Try broader search words or a different tag.</div>
+              </div>
+            )}
+          </div>
+
+          {editPath && (
+            <EditModal
+              path={editPath}
+              tagsList={tagsList}
+              onClose={() => setEditPath(null)}
+              onSaved={(msg) => { setFlash(msg); setEditPath(null); load(); }}
+            />
+          )}
+        </>
+      );
+    }
+
+    function DownloadsPage({ flash, setFlash }) {
+      const [data, setData] = useState({ active: [], history: [], storage: null, mode: "running", reason: "" });
+
+      async function load() {
+        try {
+          const res = await api("/api/downloads");
+          setData(res);
+        } catch (e) {
+          if (setFlash) setFlash(e.message);
+        }
+      }
+
+      useEffect(() => { load(); }, []);
+      useInterval(load, 10000);
+
+      async function pauseDownloads() {
+        try {
+          await api("/api/downloads/pause", { method: "POST" });
+          if (setFlash) setFlash("Downloads paused");
+          load();
+        } catch (e) {
+          if (setFlash) setFlash(e.message);
+        }
+      }
+
+      async function resumeDownloads() {
+        try {
+          await api("/api/downloads/resume", { method: "POST" });
+          if (setFlash) setFlash("Downloads resumed");
+          load();
+        } catch (e) {
+          if (setFlash) setFlash(e.message);
+          load();
+        }
+      }
+
+      const storage = data.storage || {};
+      const mode = data.mode || "running";
+      const paused = mode !== "running";
+      const free = Number(storage.percent_free || 0);
+      const used = Number(storage.percent_used || 0);
+
+      return (
+        <>
+          <div className="content">
+            {flash && <div className="flash">{flash}</div>}
+
+            <div className="stats">
+              <div className="stat">Active downloads: <strong>{data.active.length}</strong></div>
+              <div className="stat">Recent history items: <strong>{data.history.length}</strong></div>
+              <div className="stat">Free storage: <strong>{storage.free_human || "0 B"}</strong> ({free.toFixed(2)}%)</div>
+              <div className="stat">Status: <span className={`status-pill ${paused ? "paused" : ""}`}>{mode}</span></div>
+            </div>
+
+            <div className="panel">
+              <div className="section-title">Storage & Download Control</div>
+              <div className="muted">Downloads automatically pause below {data.threshold || 5}% free storage.</div>
+              <div className="storage-bar">
+                <div className={`storage-fill ${free < (data.threshold || 5) ? "low" : ""}`} style={{width:`${Math.max(0, Math.min(used, 100))}%`}} />
+              </div>
+              <div className="stats" style={{marginBottom: 0}}>
+                <div className="stat">Used: <strong>{storage.used_human || "0 B"}</strong></div>
+                <div className="stat">Free: <strong>{storage.free_human || "0 B"}</strong></div>
+                <div className="stat">Total: <strong>{storage.total_human || "0 B"}</strong></div>
+              </div>
+              {data.reason && <div className="muted" style={{marginTop:"10px"}}>Reason: {data.reason}</div>}
+              <div className="controls-row">
+                <button className="btn secondary" onClick={load}>Refresh</button>
+                {mode === "running" ? (
+                  <button className="btn danger" onClick={pauseDownloads}>Pause Downloads</button>
+                ) : (
+                  <button className="btn" onClick={resumeDownloads}>Resume Downloads</button>
+                )}
+              </div>
+            </div>
+
+            <div className="section-title">Active Downloads</div>
+            {data.active.length ? (
+              <div className="grid">
+                {data.active.map((item, idx) => (
+                  <div className="card compact" key={idx}>
+                    <div className="card-body">
+                      <div className="title-row">
+                        <div className="file-title">{item.filename || `message ${item.message_id}`}</div>
+                        <div className="file-date">{item.updated_at}</div>
+                      </div>
+                      <div className="metric-row">
+                        <span className="metric">{item.status}</span>
+                        <span className="mini-badge">{item.percent}%</span>
+                        <span className="mini-badge">{item.current} / {item.total}</span>
+                      </div>
+                      <div className="progress">
+                        <div className="progress-fill" style={{width:`${Math.max(0, Math.min(item.percent || 0, 100))}%`}} />
+                      </div>
+                      <div className="muted" style={{marginTop:"10px"}}>{item.note}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state"><div className="muted">No active downloads</div></div>
+            )}
+
+            <div className="section-title">Recent Activity</div>
+            {data.history.length ? (
+              <div className="grid">
+                {data.history.map((item, idx) => (
+                  <div className="card compact" key={idx}>
+                    <div className="card-body">
+                      <div className="title-row">
+                        <div className="file-title">{item.filename || `message ${item.message_id}`}</div>
+                        <div className="file-date">{item.updated_at}</div>
+                      </div>
+                      <div className="metric-row">
+                        <span className="metric">{item.status}</span>
+                        <span className="mini-badge">{item.percent || 0}%</span>
+                      </div>
+                      <div className="muted" style={{marginTop:"10px"}}>{item.note}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state"><div className="muted">No recent history</div></div>
+            )}
+          </div>
+        </>
+      );
+    }
+
+    function AdminDashboard({ flash }) {
+      const [data, setData] = useState(null);
+
+      async function load() {
+        const res = await api("/api/admin/overview");
+        setData(res);
+      }
+
+      useEffect(() => { load(); }, []);
+      useInterval(load, 10000);
+
+      if (!data) return <div className="content"><div className="muted">Loading…</div></div>;
+
+      const storage = data.storage || {};
+      const free = Number(storage.percent_free || 0);
+      const used = Number(storage.percent_used || 0);
+      const paused = data.download_control?.mode !== "running";
+
+      return (
+        <div className="content">
+          {flash && <div className="flash">{flash}</div>}
+
+          <div className="stats">
+            <div className="stat">Indexed files: <strong>{data.counts.indexed_files}</strong></div>
+            <div className="stat">Manual overrides: <strong>{data.counts.manual_overrides}</strong></div>
+            <div className="stat">Active downloads: <strong>{data.counts.active_downloads}</strong></div>
+            <div className="stat">Embeddings: <strong>{data.counts.embeddings}</strong></div>
+            <div className="stat">Downloads: <span className={`status-pill ${paused ? "paused" : ""}`}>{data.download_control?.mode || "running"}</span></div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Storage</div>
+            <div className="muted">Automatic pause threshold: {data.storage_threshold}% free</div>
+            <div className="storage-bar">
+              <div className={`storage-fill ${free < data.storage_threshold ? "low" : ""}`} style={{width:`${Math.max(0, Math.min(used, 100))}%`}} />
+            </div>
+            <div className="stats" style={{marginBottom: 0}}>
+              <div className="stat">Used: <strong>{storage.used_human}</strong></div>
+              <div className="stat">Free: <strong>{storage.free_human}</strong> ({free.toFixed(2)}%)</div>
+              <div className="stat">Total: <strong>{storage.total_human}</strong></div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">System Overview</div>
+            <table className="settings-table">
+              <tbody>
+                <tr><td>Auto-refresh</td><td>{data.system.auto_refresh}</td></tr>
+                <tr><td>Download directory</td><td>{data.system.download_directory}</td></tr>
+                <tr><td>Preview directory</td><td>{data.system.preview_directory}</td></tr>
+                <tr><td>Thumbnail directory</td><td>{data.system.thumbnail_directory}</td></tr>
+                <tr><td>Device</td><td>{data.system.device}</td></tr>
+                <tr><td>Log file</td><td>{data.system.log_file}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Bulk Job Status</div>
+            <table className="settings-table">
+              <tbody>
+                <tr><td>Status</td><td>{data.bulk_job.status}</td></tr>
+                <tr><td>Mode</td><td>{data.bulk_job.mode}</td></tr>
+                <tr><td>Processed</td><td>{data.bulk_job.processed} / {data.bulk_job.total}</td></tr>
+                <tr><td>Current</td><td>{data.bulk_job.current}</td></tr>
+                <tr><td>Errors</td><td>{data.bulk_job.errors}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Strongest Feedback Bias</div>
+            <table className="settings-table">
+              <thead>
+                <tr><th>Tag</th><th>Bias</th></tr>
+              </thead>
+              <tbody>
+                {data.strongest_bias.map(row => (
+                  <tr key={row.tag}>
+                    <td>{row.tag}</td>
+                    <td>{Number(row.bias).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function AdminSystem({ setFlash }) {
+      const [data, setData] = useState({ auto_refresh: "10", download_directory: "", video_sources: ["me"] });
+
+      async function load() {
+        const res = await api("/api/admin/system");
+        setData({ ...res, video_sources: res.video_sources || ["me"] });
+      }
+
+      useEffect(() => { load(); }, []);
+
+      async function save() {
+        try {
+          await api("/api/admin/system", {
+            method: "POST",
+            body: JSON.stringify(data)
+          });
+          setFlash("System settings saved");
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      async function reprocessAll() {
+        try {
+          await api("/api/admin/reprocess-all", { method: "POST" });
+          setFlash("Bulk reprocess started");
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      async function migrateLibrary() {
+        try {
+          const res = await api("/api/admin/migrate-library", { method: "POST" });
+          setFlash(`Migration complete: moved=${res.result.moved}, skipped=${res.result.skipped}, missing=${res.result.missing}, failed=${res.result.failed}`);
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      return (
+        <div className="content">
+          <div className="panel">
+            <div className="section-title">System Settings</div>
+            <div className="form-grid">
+              <div>
+                <label className="label">Global Auto-Refresh</label>
+                <select className="select" value={data.auto_refresh} onChange={e => setData({ ...data, auto_refresh: e.target.value })}>
+                  <option value="10">10 seconds</option>
+                  <option value="15">15 seconds</option>
+                  <option value="30">30 seconds</option>
+                  <option value="60">60 seconds</option>
+                  <option value="never">Never</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Download Directory</label>
+                <input className="field" value={data.download_directory} onChange={e => setData({ ...data, download_directory: e.target.value })} />
+              </div>
+            </div>
+            <div className="controls-row">
+              <button className="btn" onClick={save}>Save System Settings</button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Library Maintenance</div>
+            <div className="muted" style={{marginBottom:"12px"}}>
+              Reprocess all indexed files to regenerate tags, embeddings, thumbnails, and hover previews.
+            </div>
+            <div className="controls-row">
+              <button className="btn" onClick={reprocessAll}>Reprocess All Files</button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Library Migration</div>
+            <div className="muted" style={{marginBottom:"12px"}}>
+              Move indexed files from the original base path into the currently configured download directory.
+            </div>
+            <div className="controls-row">
+              <button className="btn" onClick={migrateLibrary}>Migrate Library Files</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function AdminSources({ setFlash }) {
+      const [sources, setSources] = useState(["me"]);
+      const [dialogs, setDialogs] = useState([]);
+      const [manual, setManual] = useState("");
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState("");
+
+      async function load() {
+        setLoading(true);
+        try {
+          const res = await api("/api/sources");
+          setSources(res.sources || ["me"]);
+          setDialogs(res.dialogs || []);
+          setError(res.error || "");
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      useEffect(() => { load(); }, []);
+
+      function normalize(values) {
+        const seen = new Set();
+        const out = [];
+        values.forEach(v => {
+          const val = String(v || "").trim();
+          if (!val) return;
+          const key = val.toLowerCase();
+          if (!seen.has(key)) {
+            out.push(val);
+            seen.add(key);
+          }
+        });
+        return out.length ? out : ["me"];
+      }
+
+      function toggleSource(ref) {
+        setSources(prev => {
+          const exists = prev.some(x => String(x).toLowerCase() === String(ref).toLowerCase());
+          return normalize(exists ? prev.filter(x => String(x).toLowerCase() !== String(ref).toLowerCase()) : [...prev, ref]);
+        });
+      }
+
+      function addManual() {
+        const pieces = manual.split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
+        if (!pieces.length) return;
+        setSources(prev => normalize([...prev, ...pieces]));
+        setManual("");
+      }
+
+      async function save() {
+        try {
+          const res = await api("/api/sources", {
+            method: "POST",
+            body: JSON.stringify({ sources })
+          });
+          setSources(res.sources || sources);
+          setFlash("Telegram video sources saved. Restart or re-run sync to pull older videos from new sources.");
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      return (
+        <div className="content">
+          <div className="panel">
+            <div className="section-title">Telegram Video Sources</div>
+            <div className="muted" style={{marginBottom:"12px"}}>
+              Choose Saved Messages, chats, groups, or channels. You can also enter @usernames, t.me links, private t.me/c links, or numeric peer IDs. New incoming videos are watched immediately after saving; older videos are pulled during startup sync.
+            </div>
+            {error && <div className="flash">{error}</div>}
+            {!error && dialogs.length <= 1 && !loading && <div className="flash">Only Saved Messages is currently visible. Manual entries still work: use @username, t.me links, private t.me/c links, or numeric peer IDs.</div>}
+
+            <div className="stats">
+              <div className="stat">Configured sources: <strong>{sources.length}</strong></div>
+              <div className="stat">Available dialogs shown: <strong>{dialogs.length}</strong></div>
+            </div>
+
+            <div className="controls-row" style={{marginBottom:"14px"}}>
+              <button className="btn secondary" onClick={() => toggleSource("me")}>{sources.includes("me") ? "Remove Saved Messages" : "Add Saved Messages"}</button>
+              <button className="btn secondary" onClick={load}>Refresh Dialog List</button>
+              <button className="btn" onClick={save}>Save Sources</button>
+            </div>
+
+            <label className="label">Enter sources manually, separated by commas or new lines</label>
+            <textarea className="field" style={{height:"110px", width:"100%"}} value={manual} onChange={e => setManual(e.target.value)} placeholder="me, @channelusername, https://t.me/channelusername, https://t.me/c/1234567890/42, -1001234567890" />
+            <div className="controls-row">
+              <button className="btn secondary" onClick={addManual}>Add Manual Sources</button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Currently Configured</div>
+            <div className="tag-row">
+              {sources.map(src => <span key={src} className="badge">{src}</span>)}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Available Chats, Groups, and Channels</div>
+            {loading ? <div className="muted">Loading dialogs…</div> : (
+              <div className="source-grid">
+                {dialogs.map(dialog => {
+                  const checked = sources.some(src => String(src).toLowerCase() === String(dialog.ref).toLowerCase() || String(src) === String(dialog.id));
+                  return (
+                    <label key={`${dialog.id}-${dialog.ref}`} className="source-option">
+                      <input type="checkbox" checked={checked} onChange={() => toggleSource(dialog.ref)} />
+                      <div>
+                        <div>{dialog.title}</div>
+                        <div className="source-kind">{dialog.kind} • {dialog.ref} • id {dialog.id}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function AdminScoring({ setFlash }) {
+      const [data, setData] = useState(null);
+
+      async function load() {
+        const res = await api("/api/admin/scoring");
+        setData(res);
+      }
+
+      useEffect(() => { load(); }, []);
+
+      async function save() {
+        try {
+          await api("/api/admin/scoring", {
+            method: "POST",
+            body: JSON.stringify({
+              weights: data.weights,
+              thresholds: data.thresholds
+            })
+          });
+          setFlash("Scoring settings saved");
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      async function resetDefaults() {
+        try {
+          await api("/api/admin/scoring/reset", { method: "POST" });
+          await load();
+          setFlash("Defaults restored");
+        } catch (e) {
+          setFlash(e.message);
+        }
+      }
+
+      if (!data) return <div className="content"><div className="muted">Loading…</div></div>;
+
+      return (
+        <div className="content">
+          <div className="panel">
+            <div className="section-title">Scoring Settings</div>
+            <table className="settings-table">
+              <thead>
+                <tr>
+                  <th>Tag</th>
+                  <th>Weight</th>
+                  <th>Threshold</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.tags.map(tag => (
+                  <tr key={tag}>
+                    <td>{tag}</td>
+                    <td>
+                      <input
+                        className="field"
+                        value={data.weights[tag]}
+                        onChange={e => setData({
+                          ...data,
+                          weights: { ...data.weights, [tag]: e.target.value }
+                        })}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="field"
+                        value={data.thresholds[tag]}
+                        onChange={e => setData({
+                          ...data,
+                          thresholds: { ...data.thresholds, [tag]: e.target.value }
+                        })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="controls-row">
+              <button className="btn" onClick={save}>Save Scoring Settings</button>
+              <button className="btn secondary" onClick={resetDefaults}>Reset Defaults</button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Feedback Bias</div>
+            <table className="settings-table">
+              <thead>
+                <tr>
+                  <th>Tag</th>
+                  <th>Bias</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.tags.map(tag => (
+                  <tr key={tag}>
+                    <td>{tag}</td>
+                    <td>{Number(data.bias[tag] || 0).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function AdminLogs() {
+      const [logs, setLogs] = useState([]);
+      const [feedback, setFeedback] = useState([]);
+
+      async function load() {
+        const [logData, feedbackData] = await Promise.all([
+          api("/api/admin/logs"),
+          api("/api/admin/feedback")
+        ]);
+        setLogs(logData.lines || []);
+        setFeedback(feedbackData.history || []);
+      }
+
+      useEffect(() => { load(); }, []);
+      useInterval(load, 10000);
+
+      return (
+        <div className="content">
+          <div className="panel">
+            <div className="section-title">Recent Manual Tag Corrections</div>
+            <table className="settings-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Model Tags</th>
+                  <th>Manual Tags</th>
+                  <th>Edited At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {feedback.length ? feedback.map((item, idx) => (
+                  <tr key={idx}>
+                    <td>{item.path}</td>
+                    <td>{(item.original_tags || []).join(", ")}</td>
+                    <td>{(item.new_tags || []).join(", ")}</td>
+                    <td>{item.edited_at}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan="4" className="muted">No manual tag edits yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel">
+            <div className="section-title">Recent Log Activity</div>
+            <pre className="log-box">{logs.join("")}</pre>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [view, setView] = useState("library");
+      const [adminTab, setAdminTab] = useState("dashboard");
+      const [flash, setFlash] = useState("");
+      const [tagsList, setTagsList] = useState([]);
+
+      useEffect(() => {
+        api("/api/tags").then(res => setTagsList(res.tags || [])).catch(() => {});
+      }, []);
+
+      useEffect(() => {
+        if (!flash) return;
+        const id = setTimeout(() => setFlash(""), 4000);
+        return () => clearTimeout(id);
+      }, [flash]);
+
+      return (
+        <div className="app">
+          <Sidebar
+            view={view}
+            setView={setView}
+            adminTab={adminTab}
+            setAdminTab={setAdminTab}
+          />
+
+          <div className="main">
+            {view === "library" && <LibraryPage flash={flash} setFlash={setFlash} tagsList={tagsList} />}
+            {view === "downloads" && <DownloadsPage flash={flash} setFlash={setFlash} />}
+            {view === "admin" && adminTab === "dashboard" && <AdminDashboard flash={flash} />}
+            {view === "admin" && adminTab === "system" && <AdminSystem setFlash={setFlash} />}
+            {view === "admin" && adminTab === "scoring" && <AdminScoring setFlash={setFlash} />}
+            {view === "admin" && adminTab === "sources" && <AdminSources setFlash={setFlash} />}
+            {view === "admin" && adminTab === "logs" && <AdminLogs />}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
 </body>
 </html>
