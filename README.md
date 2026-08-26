@@ -98,6 +98,10 @@ Start with:
 - [Packaging](docs/PACKAGING.md)
 - [Source Sync](docs/SOURCE_SYNC.md)
 
+## Legal notice
+
+TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user. The authors and contributors of TeleSaved AI bear no liability for how the software is used or what content is stored with it.
+
 ## Security notice
 
 Never commit runtime credentials, Telegram session files, user/auth state, databases, logs, downloaded media, generated previews, transcripts, trash, or backups.
