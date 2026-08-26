@@ -54,11 +54,14 @@ fine-tuning.
 
 - **CAP-3 — Setup wizard (first-run UI)**
   - **intent:** On first launch with no `config.json`, the app presents a browser-based
-    setup wizard that collects Telegram `api_id` / `api_hash`, validates them against
-    the Telegram API, sets `base_path`, writes `config.json`, and prompts for the
-    initial Admin account — all without touching a terminal.
+    setup wizard that collects Telegram `api_id` / `api_hash`, performs a **live
+    validation call against the Telegram API** before writing config, sets `base_path`,
+    writes `config.json` atomically, and prompts for the initial Admin account — all
+    without touching a terminal. (Users are assumed to have internet access and an
+    active Telegram account as prerequisites for the product.)
   - **success:** A user with zero shell experience can complete setup and reach the
-    library in under 5 minutes using only a browser.
+    library in under 5 minutes using only a browser. Invalid credentials are rejected
+    with a clear error before `config.json` is written.
 
 - **CAP-4 — AI signal fields on video records**
   - **intent:** Every video record in the database carries a structured `ai_signals`
@@ -73,18 +76,27 @@ fine-tuning.
   - **intent:** The AI pipeline integrates NudeNet (MIT-licensed) as the scene
     composition and performer presentation classifier, replacing the stock YOLO
     object-detection pass for adult content signals. YOLO is retained for non-adult
-    object tagging.
+    object tagging. The NudeNet confidence threshold defaults to **0.5** and is
+    user-configurable via a setting in the Admin panel (range 0.1–0.95). Detections
+    below the configured threshold are stored as `null` (unclassified) rather than
+    committed as low-confidence labels.
   - **success:** After processing a video the `scene_composition` field is populated
     with a value from the defined vocabulary. The pipeline completes without error on
-    CPU-only hardware.
+    CPU-only hardware. Changing the threshold setting and reprocessing a video
+    reflects the new threshold without a code change.
 
 - **CAP-6 — Controlled act-tag vocabulary (admin-managed)**
-  - **intent:** Admins can define, edit, merge, and retire act tags from a dedicated
-    Tag Management panel. The initial seed vocabulary includes: Oral, Anal, Vaginal,
-    Handjob, Fingering, Bondage, BDSM, CNC, Watersports, PnP, Creampie, Squirting,
-    Toys, Strap-on, Threesome, Gangbang, Orgy.
+  - **intent:** The Tag Management panel is accessible to **Admin and Manager groups
+    by default**. Per-group access to Tag Management is configurable via the granular
+    group permissions system — any custom group can be granted or denied the
+    `tags.manage` permission independently. Admins can define, edit, merge, and retire
+    act tags. The initial seed vocabulary includes: Oral, Anal, Vaginal, Handjob,
+    Fingering, Bondage, BDSM, CNC, Watersports, PnP, Creampie, Squirting, Toys,
+    Strap-on, Threesome, Gangbang, Orgy.
   - **success:** An Admin can add "Fisting" to the vocabulary, and it immediately
-    appears as a selectable tag in Review Studio without a code change or restart.
+    appears as a selectable tag in Review Studio without a code change or restart. A
+    custom group with `tags.manage` granted can also access Tag Management; one with
+    it revoked cannot.
 
 - **CAP-7 — User tag contribution flow**
   - **intent:** Any user with `tags.manage` permission can suggest a new act tag from
@@ -190,12 +202,18 @@ service runs as the `telesaved` system user.
 - `tag_mappings.json` will be seeded with the agreed default display tag mappings on
   first run if it does not already exist.
 
-## Open Questions
+## Decisions
 
-- **OQ-1:** Should the setup wizard Telegram credential validation perform a live API
-  call (requires network at setup time) or defer validation to first sync? Live
-  validation gives better UX; deferred is more resilient on restricted networks.
-- **OQ-2:** Should Tag Management be an Admin-only panel or accessible to the Manager
-  group as well? The Manager role currently has `tags.manage` but not `system.admin`.
-- **OQ-3:** What is the NudeNet confidence threshold below which `scene_composition`
-  is stored as `null` (unclassified) rather than a low-confidence guess?
+All open questions resolved by project owner:
+
+- **OQ-1 → RESOLVED:** Setup wizard performs a **live Telegram API validation call**.
+  Internet access and a Telegram account are prerequisites for the product; deferred
+  validation provides no meaningful benefit.
+
+- **OQ-2 → RESOLVED:** Tag Management is accessible to **Admin and Manager by
+  default**. Group-level access is controlled by the granular `tags.manage` permission
+  which can be granted to or revoked from any custom group. See CAP-6.
+
+- **OQ-3 → RESOLVED:** NudeNet confidence threshold **defaults to 0.5**, is
+  user-configurable in Admin settings (range 0.1–0.95), and is applied per-detection
+  at pipeline runtime. See CAP-5.
