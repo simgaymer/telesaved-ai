@@ -9,7 +9,8 @@ WorkingDirectory=/opt/telesaved
 ExecStart=/opt/telesaved/venv/bin/python /opt/telesaved/app.py
 Restart=always
 RestartSec=5
-User=root
+User=telesaved
+Group=telesaved
 Environment=PYTHONUNBUFFERED=1
 Environment=TELESAVED_WHISPER_BIN=/opt/telesaved/venv/bin/whisper
 Environment=TELESAVED_WHISPER_DEVICE=cpu

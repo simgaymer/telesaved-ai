@@ -21,8 +21,8 @@ IFS=$'\n\t'
 umask 022
 
 PACKAGE_NAME="telesaved-ai"
-PACKAGE_VERSION="4.4.3-2"
-APP_VERSION="4.4.3"
+PACKAGE_VERSION="4.5.0"
+APP_VERSION="4.5.0"
 SOURCE_DIR="${SOURCE_DIR:-/opt/telesaved}"
 OUTPUT_DIR="${OUTPUT_DIR:-${SOURCE_DIR}/dist}"
 BUILD_ROOT=""
@@ -430,8 +430,8 @@ After=network-online.target local-fs.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=telesaved
+Group=telesaved
 WorkingDirectory=/opt/telesaved
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
@@ -575,7 +575,13 @@ case "${1:-configure}" in
         ;;
 esac
 
+# Create dedicated service user if it does not already exist (idempotent).
+if ! id -u telesaved >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin telesaved
+fi
+
 install -d -m 0755 /opt/telesaved
+chown -R telesaved:telesaved /opt/telesaved
 systemctl stop telesaved.service >/dev/null 2>&1 || true
 
 recover_service() {
@@ -591,7 +597,7 @@ systemctl enable telesaved.service >/dev/null
 systemctl restart telesaved.service
 trap - ERR
 
-printf '\nTeleSaved AI 4.4.3-2 installed.\n'
+printf '\nTeleSaved AI 4.5.0 installed.\n'
 printf 'Web interface: http://SERVER-IP:8080\n'
 printf 'Telegram login: sudo telesaved-telegram-login\n'
 printf 'Dependency repair: sudo telesaved-repair-dependencies\n'
