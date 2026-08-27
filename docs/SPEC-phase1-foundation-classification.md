@@ -1,5 +1,8 @@
 ---
 id: SPEC-phase1-foundation-classification
+status: done
+shippedVersion: 4.5.0
+shippedCommit: 7ab0c04
 companions:
   - docs/ROADMAP.md
   - docs/ACCESS_CONTROL.md
@@ -15,6 +18,8 @@ sources:
 > preservation-validated contract for what to build, test, and validate. Source
 > documents listed in frontmatter are for traceability — consult them only if you
 > need narrative rationale or prose color this contract intentionally omits.
+>
+> **Status: SHIPPED — v4.5.0 (commit 7ab0c04). All 13 capabilities delivered.**
 
 # Phase 1 — Foundation + Classification Core (v4.5)
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.5.1 — AI Librarian + Audio Intelligence 2.0
+
+- Added AI Librarian UI: **✨ Ask AI** button in the Library topbar opens a slide-in panel with natural-language search powered by `/api/librarian/ask`. Pre-loaded example prompts, conversation history, inline result rows, and filter explanation chips.
+- Upgraded Audio tab to Audio Intelligence 2.0: segmented transcript view with timestamp · speaker · text per segment. Colour-coded speaker badges (S1–S4). Native or heuristic speaker mode labelled. Language, duration, and segment count metadata row.
+- Added inline transcript editor: double-click any segment to edit text, commit with Enter, save all edits at once.
+- Added plain text / segmented view toggle in the Audio tab.
+- Stabilization: SetupWizard now calls `/api/auth/bootstrap` separately after `/api/setup/save` to correctly create the admin account.
+- Stabilization: Connectivity banner correctly checks for `"online"` (actual backend value).
+- Stabilization: `VideoCard` image `onError` clears src to prevent infinite reload loop.
+- Documentation: full audit and update of all docs to v4.5.0; `ACCESS_CONTROL.md`, `USER_MANAGEMENT.md`, `TROUBLESHOOTING.md`, `TELEGRAM_SOURCES.md`, `SOURCE_SYNC.md` all updated. `epics.md` and `SPEC-phase1-foundation-classification.md` marked complete.
+
 ## 4.5.0 — Foundation + Classification Core
 
 - Added browser-based 4-step setup wizard (Welcome, Telegram credentials with live validation, vault path, admin account). No terminal required for first-run configuration.

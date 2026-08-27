@@ -1,5 +1,8 @@
 ---
-stepsCompleted: [step-01, step-02, step-03]
+stepsCompleted: [step-01, step-02, step-03, step-04, step-05]
+status: done
+shippedVersion: 4.5.0
+shippedCommit: 7ab0c04
 inputDocuments:
   - docs/SPEC-phase1-foundation-classification.md
   - docs/ROADMAP.md
@@ -18,6 +21,8 @@ This document provides the complete epic and story breakdown for TeleSaved AI Ph
 `SPEC-phase1-foundation-classification.md` into implementable stories.
 
 Source baseline: `app.py` v4.4.3, 10,515 lines. Target version: 4.5.0.
+
+**Status: SHIPPED — v4.5.0 (commit 7ab0c04). All 6 epics, 18 stories, and 25 FRs delivered.**
 
 ---
 
