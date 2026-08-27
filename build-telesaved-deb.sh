@@ -438,6 +438,8 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=CUDA_VISIBLE_DEVICES=
 Environment=PATH=/opt/telesaved/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=TELESAVED_WHISPER_BIN=/opt/telesaved/venv/bin/whisper
+Environment=HOME=/opt/telesaved
+Environment=XDG_CACHE_HOME=/opt/telesaved/.cache
 ExecStart=/opt/telesaved/venv/bin/python /opt/telesaved/app.py
 Restart=on-failure
 RestartSec=10
@@ -581,6 +583,7 @@ if ! id -u telesaved >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 /opt/telesaved
+install -d -m 0755 /opt/telesaved/.cache
 chown -R telesaved:telesaved /opt/telesaved
 systemctl stop telesaved.service >/dev/null 2>&1 || true
 
@@ -589,6 +592,11 @@ recover_service() {
     systemctl start telesaved.service >/dev/null 2>&1 || true
 }
 trap recover_service ERR
+
+# Point pip, PyTorch, and other XDG-aware tools at /opt/telesaved so they
+# don't try to write to /home/telesaved which does not exist (--no-create-home).
+export HOME=/opt/telesaved
+export XDG_CACHE_HOME=/opt/telesaved/.cache
 
 /usr/lib/telesaved/install-runtime.sh
 

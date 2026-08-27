@@ -12,6 +12,8 @@ RestartSec=5
 User=telesaved
 Group=telesaved
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/opt/telesaved
+Environment=XDG_CACHE_HOME=/opt/telesaved/.cache
 Environment=TELESAVED_WHISPER_BIN=/opt/telesaved/venv/bin/whisper
 Environment=TELESAVED_WHISPER_DEVICE=cpu
 Environment=TELESAVED_WHISPER_MODEL=tiny
