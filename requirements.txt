@@ -10,6 +10,7 @@ regex>=2023.0
 ftfy>=6.1
 openai-whisper>=20231117
 ldap3>=2.9
+nudenet>=3.4
 # Install CPU PyTorch explicitly before the remaining ML stack when using older/unsupported GPUs:
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 # Install CLIP separately:

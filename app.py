@@ -564,6 +564,7 @@ DEFAULT_TAG_THRESHOLDS = {
     "Clip": 0.23,
     "Movie": 0.23,
 }
+DEFAULT_NUDENET_THRESHOLD = 0.5
 DEFAULT_SETTINGS = {
     "tag_weights": DEFAULT_TAG_WEIGHTS,
     "tag_thresholds": DEFAULT_TAG_THRESHOLDS,
@@ -575,6 +576,7 @@ DEFAULT_SETTINGS = {
     "tag_metadata": {},
     "smart_collections": [],
     "automation_rules": [],
+    "nudenet_threshold": DEFAULT_NUDENET_THRESHOLD,
     "privacy": {
         "enabled": False,
         "pin_hash": "",
@@ -596,6 +598,7 @@ settings_data.setdefault("custom_tags", [])
 settings_data.setdefault("tag_metadata", {})
 settings_data.setdefault("smart_collections", [])
 settings_data.setdefault("automation_rules", [])
+settings_data.setdefault("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD)
 settings_data.setdefault("privacy", {})
 settings_data["privacy"].setdefault("enabled", False)
 settings_data["privacy"].setdefault("pin_hash", "")
@@ -1745,6 +1748,7 @@ def save_settings():
             "tag_metadata": settings_data.get("tag_metadata", {}),
             "smart_collections": get_smart_collections() if "get_smart_collections" in globals() else settings_data.get("smart_collections", []),
             "automation_rules": get_rules() if "get_rules" in globals() else settings_data.get("automation_rules", []),
+            "nudenet_threshold": settings_data.get("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD),
             "privacy": get_privacy_settings(),
         }
     )
@@ -1819,17 +1823,17 @@ def compute_feedback_bias():
         bias[tag] = max(-0.08, min(net * 0.01, 0.08))
     return bias
 # ================= SQLITE STATE BACKEND =================
-SQLITE_SCHEMA_VERSION = 1
+SQLITE_SCHEMA_VERSION = 2
 sqlite_lock = Lock()
 def sqlite_connect():
     conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 def init_sqlite_db():
-    """Create the SQLite metadata store used by TeleSaved 2.x.
-    The app still keeps a compatibility JSON snapshot at state.json for older
-    tools and emergency rollbacks, but the canonical active-library index is
-    now stored in telesaved.db.
+    """Create and migrate the SQLite metadata store.
+    Schema versions:
+      1 — original schema (videos, message_ids, content_hashes, app_meta)
+      2 — adds ai_signals TEXT column to videos
     """
     ensure_directory(BASE_PATH)
     with sqlite_lock:
@@ -1873,6 +1877,21 @@ def init_sqlite_db():
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_updated_at ON videos(updated_at)")
+            # ── Schema v2 migration ──────────────────────────────────────────
+            # Add ai_signals column if upgrading from v1.
+            existing_version = 1
+            row = conn.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
+            if row:
+                try:
+                    existing_version = int(row["value"])
+                except Exception:
+                    existing_version = 1
+            if existing_version < 2:
+                try:
+                    conn.execute("ALTER TABLE videos ADD COLUMN ai_signals TEXT")
+                    logger.info("DB migration: added ai_signals column (schema v1 → v2)")
+                except Exception:
+                    pass  # column already exists (idempotent)
             conn.execute(
                 "INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SQLITE_SCHEMA_VERSION)),
@@ -1976,6 +1995,31 @@ def persist_state_to_sqlite(ids, hashes, tag_map, score_map, embedding_map, meta
             updated_at))
             conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)", ("backend", "sqlite"))
             conn.commit()
+def save_ai_signals(rel_path, signals):
+    """Write the ai_signals JSON for a single video row.
+    Called by the pipeline after NudeNet classification.
+    signals is a dict or None; None clears the column.
+    """
+    value = json.dumps(signals) if signals is not None else None
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.execute(
+                "UPDATE videos SET ai_signals = ? WHERE path = ?",
+                (value, str(rel_path)),
+            )
+            conn.commit()
+
+def get_ai_signals(rel_path):
+    """Return the ai_signals dict for a video, or None if not yet classified."""
+    try:
+        with sqlite_connect() as conn:
+            row = conn.execute("SELECT ai_signals FROM videos WHERE path = ?", (str(rel_path),)).fetchone()
+            if row and row["ai_signals"]:
+                return json.loads(row["ai_signals"])
+    except Exception:
+        pass
+    return None
+
 def write_legacy_state_snapshot(ids, hashes, tag_map, score_map, embedding_map, metadata_map):
     """Write a JSON snapshot for backups, diagnostics, and rollback tools."""
     save_json(
@@ -2780,6 +2824,126 @@ text_tokens = {
     tag: clip.tokenize(prompts).to(device)
     for tag, prompts in PROMPTS.items()
 }
+# ================= NUDENET CLASSIFIER =================
+_nudenet_detector = None
+_nudenet_load_attempted = False
+
+def _get_nudenet():
+    """Lazy-load NudeNet detector. Returns None if NudeNet is not installed."""
+    global _nudenet_detector, _nudenet_load_attempted
+    if _nudenet_load_attempted:
+        return _nudenet_detector
+    _nudenet_load_attempted = True
+    try:
+        from nudenet import NudeDetector
+        _nudenet_detector = NudeDetector()
+        logger.info("NudeNet detector loaded successfully.")
+    except Exception as e:
+        logger.warning("NudeNet not available — adult content classification disabled: %s", e)
+        _nudenet_detector = None
+    return _nudenet_detector
+
+# Map NudeNet labels to our taxonomy vocabulary.
+_NUDENET_SCENE_COMPOSITION_RULES = [
+    # (label_substring, performer count signal)
+    ("MALE_GENITALIA",    "male_detected"),
+    ("FEMALE_GENITALIA",  "female_detected"),
+    ("FEMALE_BREAST",     "female_detected"),
+    ("MALE_BREAST",       "male_detected"),
+    ("BUTTOCKS",          "body_detected"),
+    ("ANUS",              "body_detected"),
+    ("FEET",              "body_detected"),
+    ("ARMPITS",           "body_detected"),
+    ("BELLY",             "body_detected"),
+    ("FACE_FEMALE",       "female_face"),
+    ("FACE_MALE",         "male_face"),
+]
+
+def _nudenet_signals_from_detections(detections, threshold):
+    """Convert raw NudeNet detections into a structured ai_signals dict.
+
+    Args:
+        detections: list of dicts from NudeDetector.detect(), each with 'class' and 'score' keys.
+        threshold: float confidence threshold; detections below this are ignored.
+
+    Returns:
+        dict with scene_composition, performer_presentations, production_type, pov_type, setting keys,
+        or None if no detections exceed the threshold.
+    """
+    if not detections:
+        return None
+
+    male_signals   = 0
+    female_signals = 0
+    body_signals   = 0
+
+    for det in detections:
+        score = float(det.get("score", 0.0))
+        if score < threshold:
+            continue
+        label = str(det.get("class", "")).upper()
+        if "MALE_GENITALIA" in label or "FACE_MALE" in label:
+            male_signals += 1
+        elif "FEMALE_GENITALIA" in label or "FEMALE_BREAST" in label or "FACE_FEMALE" in label:
+            female_signals += 1
+        else:
+            body_signals += 1
+
+    if male_signals == 0 and female_signals == 0 and body_signals == 0:
+        return None  # nothing above threshold
+
+    # Derive scene_composition
+    if male_signals > 0 and female_signals > 0:
+        scene_comp = "group_mixed" if (male_signals + female_signals) > 2 else "duo_mf"
+    elif male_signals > 1:
+        scene_comp = "group_all_m" if male_signals > 2 else "duo_mm"
+    elif female_signals > 1:
+        scene_comp = "group_all_f" if female_signals > 2 else "duo_ff"
+    elif male_signals == 1 and female_signals == 0:
+        scene_comp = "solo_m"
+    elif female_signals == 1 and male_signals == 0:
+        scene_comp = "solo_f"
+    else:
+        scene_comp = "unknown"
+
+    # Derive performer_presentations list
+    presentations = []
+    if male_signals > 0:
+        presentations.append("male")
+    if female_signals > 0:
+        presentations.append("female")
+
+    return {
+        "scene_composition": scene_comp,
+        "performer_presentations": presentations,
+        "production_type": None,   # not classifiable from NudeNet alone
+        "pov_type": None,          # not classifiable from NudeNet alone
+        "setting": None,           # not classifiable from NudeNet alone
+        "nudenet_detections_above_threshold": male_signals + female_signals + body_signals,
+    }
+
+def run_nudenet_analysis(frame_paths, threshold=None):
+    """Run NudeNet on a sample of extracted frame paths.
+
+    Returns an ai_signals dict, or None if NudeNet is unavailable or no
+    detections exceed the configured threshold.
+    """
+    if threshold is None:
+        threshold = float(settings_data.get("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD))
+    detector = _get_nudenet()
+    if detector is None:
+        return None
+    # Sample up to 6 evenly-spaced frames to keep CPU cost reasonable.
+    sample = frame_paths[::max(1, len(frame_paths) // 6)][:6]
+    all_detections = []
+    for frame_path in sample:
+        try:
+            result = detector.detect(frame_path)
+            if isinstance(result, list):
+                all_detections.extend(result)
+        except Exception as e:
+            logger.warning("NudeNet detection failed for frame %s: %s", frame_path, e)
+    return _nudenet_signals_from_detections(all_detections, threshold)
 # ================= FRAME EXTRACTION =================
 def extract_frames(video_path):
     folder = os.path.join(FRAME_PATH, os.path.basename(video_path))
@@ -3045,6 +3209,22 @@ def fused_tag(video_path, rel_path=None):
     if rel_path:
         generate_thumbnail(frame_paths, rel_path)
         generate_preview_gif(frame_paths, rel_path)
+    # ── NudeNet classification ───────────────────────────────────────────────
+    if rel_path:
+        try:
+            ai_signals = run_nudenet_analysis(frame_paths)
+            save_ai_signals(rel_path, ai_signals)
+            if ai_signals:
+                logger.info(
+                    "NudeNet classification for %s => scene_composition=%s presentations=%s",
+                    rel_path,
+                    ai_signals.get("scene_composition"),
+                    ai_signals.get("performer_presentations"),
+                )
+            else:
+                logger.info("NudeNet classification for %s => no detections above threshold", rel_path)
+        except Exception as e:
+            logger.warning("NudeNet analysis failed for %s: %s", rel_path, e)
     images = []
     for p in frame_paths:
         try:
@@ -9344,6 +9524,7 @@ async def api_admin_scoring_get(request):
         "thresholds": TAG_THRESHOLDS,
         "bias": compute_feedback_bias(),
         "tags": PREDEFINED_TAGS,
+        "nudenet_threshold": settings_data.get("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD),
     })
 @routes.post("/api/admin/scoring")
 async def api_admin_scoring_post(request):
@@ -9356,6 +9537,14 @@ async def api_admin_scoring_post(request):
             TAG_THRESHOLDS[tag] = max(0.0, min(float(thresholds.get(tag, TAG_THRESHOLDS[tag])), 1.5))
         except Exception:
             return web.json_response({"ok": False, "error": f"Invalid numeric value for {tag}"}, status=400)
+    if "nudenet_threshold" in data:
+        try:
+            nt = float(data["nudenet_threshold"])
+            if not (0.1 <= nt <= 0.95):
+                return web.json_response({"ok": False, "error": "nudenet_threshold must be between 0.1 and 0.95"}, status=400)
+            settings_data["nudenet_threshold"] = round(nt, 3)
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "nudenet_threshold must be a number"}, status=400)
     save_settings()
     return web.json_response({"ok": True})
 @routes.post("/api/admin/scoring/reset")
@@ -9363,6 +9552,7 @@ async def api_admin_scoring_reset(request):
     for tag in PREDEFINED_TAGS:
         TAG_WEIGHTS[tag] = DEFAULT_TAG_WEIGHTS.get(tag, 1.0)
         TAG_THRESHOLDS[tag] = DEFAULT_TAG_THRESHOLDS.get(tag, 0.99)
+    settings_data["nudenet_threshold"] = DEFAULT_NUDENET_THRESHOLD
     save_settings()
     return web.json_response({"ok": True})
 @routes.get("/api/admin/logs")
