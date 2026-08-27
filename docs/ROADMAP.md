@@ -11,11 +11,12 @@ Completed bundle roadmap:
 | 4.4.0 | Local User Management, RBAC, and Source ACL |
 | 4.4.1 | LDAP Identity Backend |
 | 4.4.2 | Advanced Granular Search |
+| 4.5.0 | Foundation + Classification Core |
 
 Recommended next priorities:
 
-1. SSO/OIDC integration.
-2. Stabilization and regression cleanup.
+1. Stabilization and regression cleanup.
+2. SSO/OIDC integration.
 3. Audio Intelligence 2.0 with diarization and transcript editor.
 4. Media Health and Repair Center.
 5. Performance optimization.
@@ -23,3 +24,4 @@ Recommended next priorities:
 7. Admin audit log.
 8. Backup/restore 2.0.
 9. Built-in help and documentation expansion.
+10. AI Librarian UI (`/api/librarian/ask` natural language search).

@@ -17,17 +17,7 @@ sudo cp -a app.py frontend build-telesaved-deb.sh config.example.json requiremen
 cd /opt/telesaved
 ```
 
-## 3. Create configuration
-
-```bash
-sudo cp config.example.json config.json
-sudo nano config.json
-sudo chmod 600 config.json
-```
-
-Set your Telegram `api_id`, `api_hash`, and storage `base_path`.
-
-## 4. Create the Python virtual environment
+## 3. Create the Python virtual environment
 
 ```bash
 sudo ./scripts/install-telesaved-venv.sh
@@ -35,7 +25,7 @@ sudo ./scripts/install-telesaved-venv.sh
 
 The installer creates `/opt/telesaved/venv`, installs CPU PyTorch, installs TeleSaved dependencies, installs CLIP, installs the systemd unit, and starts the service if `config.json` exists.
 
-## 5. Start or restart TeleSaved
+## 4. Start TeleSaved
 
 ```bash
 sudo systemctl daemon-reload
@@ -44,20 +34,16 @@ sudo systemctl restart telesaved
 sudo systemctl status telesaved --no-pager
 ```
 
-Open:
-
-```text
-http://SERVER_IP:8080/
-```
+Open `http://SERVER_IP:8080/` — the setup wizard will guide you through Telegram credential configuration and admin account creation.
 
 ## Debian package build
 
 ```bash
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.4.2_amd64.deb
+sudo apt install ./dist/telesaved-ai_4.5.0_all.deb
 ```
 
-The package installs files under `/opt/telesaved` and a systemd unit. Python ML dependencies may still need the venv installer depending on deployment method.
+The package installs files under `/opt/telesaved`, creates a dedicated `telesaved` system user, and registers a systemd service. The Python venv is built on the target machine on first install.
 
 ## Upgrade notes
 
@@ -65,4 +51,4 @@ The package installs files under `/opt/telesaved` and a systemd unit. Python ML 
 - Back up the configured `base_path` metadata files.
 - Apply the new files or install the new package.
 - Restart `telesaved.service`.
-- Verify the About page version.
+- Schema migrations run automatically on startup — no manual DB changes required.

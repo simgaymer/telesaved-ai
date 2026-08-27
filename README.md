@@ -2,25 +2,31 @@
 
 TeleSaved AI is a self-hosted Telegram video archiving, indexing, tagging, review, and media-management application.
 
-It downloads videos from selected Telegram sources, stores them in a local vault, generates thumbnails/previews, applies AI-assisted tagging, supports semantic and granular search, and provides administrative tools for source management, cleanup, duplicates, transcripts, backups, user access control, and library maintenance.
+It downloads videos from selected Telegram sources, stores them in a local vault, generates thumbnails and previews, applies AI-assisted classification and tagging, supports semantic and granular search, and provides administrative tools for source management, cleanup, duplicates, transcripts, backups, user access control, and library maintenance.
 
-Current source version: **4.4.2 — Advanced Granular Search**.
+Current source version: **4.5.0 — Foundation + Classification Core**.
+
+> **Legal notice:** TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user.
 
 ## Major features
 
 - Telegram Saved Messages, chat, group, and channel video ingestion.
 - Source Pipelines 2.0 with per-source controls and Telegram metadata preservation.
-- AI-assisted tagging with CLIP and YOLO.
+- Browser-based 4-step setup wizard — no terminal required for first-run configuration.
+- AI-assisted tagging with CLIP, YOLO, and NudeNet adult content classification.
+- Structured AI signals: scene composition, performer presentations, production type, POV, setting.
+- Controlled act-tag vocabulary (Admin-managed) with user contribution and approval workflow.
 - FAISS semantic search plus advanced granular metadata search.
-- Search by filename, path, prefix, date/date range, duration, source, tags, personal state, favorite, rating, watched, watch-later, and file status.
-- Thumbnails, hover previews, scene timelines, and video detail pages.
-- Whisper-based audio analysis and timestamped transcript generation.
+- Search by filename, date, duration, source, tags, AI signals, language, personal state, favorite, rating, watched, watch-later, and file status.
+- Thumbnails, hover previews, scene timelines, and full-page video detail with tabs.
+- Whisper-based audio analysis, timestamped transcripts, SRT/VTT subtitle export, and language detection.
 - Trash/restore workflow and exact/possible duplicate management.
 - Guided cleanup, review studio, smart collections, ratings, favorites, and personal states.
-- Persistent jobs page with queue/status tracking.
+- Persistent jobs page with queue/status tracking and per-job pause/resume/cancel.
+- Limp mode: library stays accessible when Telegram is unreachable; jobs auto-pause and auto-resume.
 - Local multi-user login, groups, RBAC, and source access control.
 - LDAP identity backend support.
-- Debian package build script and systemd deployment support.
+- Debian package build script and systemd deployment support (runs as dedicated non-root `telesaved` user).
 
 ## Repository layout
 
@@ -34,32 +40,42 @@ install-ldap-deps.sh               helper for LDAP dependency install
 systemd/telesaved.service          venv-based systemd unit example
 scripts/install-telesaved-venv.sh  zero-touch venv installer for deployed systems
 scripts/repair-whisper-cli.sh      Whisper repair helper
-scripts/push-full-source-to-github.sh  live-source sync helper
 docs/                             project documentation
 ```
 
-## Quick start on Debian/Ubuntu
+## Quick start (Debian package — recommended)
+
+```bash
+# Build the package
+chmod +x build-telesaved-deb.sh
+./build-telesaved-deb.sh
+
+# Install on target system
+sudo apt install ./dist/telesaved-ai_4.5.0_all.deb
+```
+
+After installation:
+
+1. Open `http://SERVER_IP:8080/` in a browser.
+2. Complete the 4-step setup wizard: Welcome → Telegram credentials (validated live) → vault path → admin account.
+3. Add a Telegram source under Administration → Sources.
+4. Videos download and are processed automatically.
+
+## Quick start (from source)
 
 ```bash
 sudo mkdir -p /opt/telesaved
 sudo cp -a app.py frontend build-telesaved-deb.sh config.example.json requirements.txt systemd scripts install-ldap-deps.sh /opt/telesaved/
 cd /opt/telesaved
-sudo cp config.example.json config.json
-sudo nano config.json
 sudo ./scripts/install-telesaved-venv.sh
+sudo systemctl start telesaved
 ```
 
-Then open:
-
-```text
-http://SERVER_IP:8080/
-```
-
-On a fresh install, TeleSaved prompts for the first local Admin account.
+Then open `http://SERVER_IP:8080/` — the setup wizard will guide you through configuration.
 
 ## Configuration
 
-`config.json` is intentionally ignored by Git because it contains Telegram API credentials. Use `config.example.json` as a template:
+`config.json` is written by the setup wizard and is intentionally ignored by Git. Use `config.example.json` as a template if configuring manually:
 
 ```json
 {
@@ -69,49 +85,30 @@ On a fresh install, TeleSaved prompts for the first local Admin account.
 }
 ```
 
-The `base_path` is where TeleSaved stores state, logs, thumbnails, previews, transcripts, trash, backups, and by default downloaded media.
+The `base_path` is where TeleSaved stores state, logs, thumbnails, previews, transcripts, trash, backups, and downloaded media.
 
 ## Build a Debian package
 
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.4.2_amd64.deb
+sudo apt install ./dist/telesaved-ai_4.5.0_all.deb
 ```
 
-By default, `config.json` is not bundled. For a private/internal build only:
-
-```bash
-TELESAVED_INCLUDE_CONFIG=1 ./build-telesaved-deb.sh
-```
+The package creates a dedicated non-root `telesaved` system user, installs the Python venv on first install, and registers a systemd service.
 
 ## Documentation
 
-Start with:
+See the [`docs/`](docs/) directory for:
 
 - [Installation](docs/INSTALLATION.md)
 - [Configuration](docs/CONFIGURATION.md)
+- [Features](docs/FEATURES.md)
 - [Advanced Search](docs/ADVANCED_SEARCH.md)
-- [User Management and RBAC](docs/USER_MANAGEMENT.md)
-- [Telegram Sources](docs/TELEGRAM_SOURCES.md)
 - [Audio and Whisper](docs/AUDIO_WHISPER.md)
+- [Administration](docs/ADMINISTRATION.md)
+- [User Management and RBAC](docs/USER_MANAGEMENT.md)
+- [Access Control](docs/ACCESS_CONTROL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Packaging](docs/PACKAGING.md)
-- [Source Sync](docs/SOURCE_SYNC.md)
-
-## Legal notice
-
-TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user. The authors and contributors of TeleSaved AI bear no liability for how the software is used or what content is stored with it.
-
-## Security notice
-
-Never commit runtime credentials, Telegram session files, user/auth state, databases, logs, downloaded media, generated previews, transcripts, trash, or backups.
-
-See [SECURITY.md](SECURITY.md).
-
-## Credits
-
-TeleSaved AI was authored by James "Jamie" Villegas with AI-assisted development support from ChatGPT. It builds on open-source projects including aiohttp, Telethon, PyTorch, OpenAI CLIP, Ultralytics YOLO, FAISS, Pillow, FFmpeg, Whisper, React, Babel, and ldap3.
-
-## License
-
-AGPL-3.0-only. See [LICENSE](LICENSE).
+- [Roadmap](docs/ROADMAP.md)

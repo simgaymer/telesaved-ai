@@ -828,7 +828,7 @@
           <img src={src} loading="lazy" alt={item.filename}
             onMouseEnter={() => setSrc(item.preview_url)}
             onMouseLeave={() => setSrc(item.thumb_url)}
-            onError={() => setSrc(item.thumb_url)} />
+            onError={() => setSrc("")} />
           <div className="vcard-overlay">
             <div className="vcard-overlay-actions" onClick={e => e.stopPropagation()}>
               <a className="btn btn-secondary btn-sm" href={item.file_url} target="_blank" rel="noreferrer">▶ Open</a>
@@ -912,9 +912,10 @@
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
     async function checkDisk(path) {
+      // /api/setup/disk-space is not yet exposed; silently skip if absent
       try {
         const r = await api(`/api/setup/disk-space?path=${encodeURIComponent(path)}`);
-        setDiskInfo(r);
+        if (r && r.free_human) setDiskInfo(r);
       } catch (e) { setDiskInfo(null); }
     }
 
@@ -934,15 +935,22 @@
     async function finish() {
       setErr(""); setLoading(true);
       try {
+        // Step 1: write config.json via /api/setup/save
         const r = await api("/api/setup/save", {
           method: "POST",
           body: JSON.stringify({
-            api_id: parseInt(form.api_id), api_hash: form.api_hash, phone: form.phone,
-            base_path: form.base_path, admin_username: form.admin_user, admin_password: form.admin_pass,
+            api_id: parseInt(form.api_id), api_hash: form.api_hash,
+            base_path: form.base_path,
           }),
         });
-        if (r && r.ok) onComplete();
-        else setErr(r?.error || "Setup failed");
+        if (!r || !r.ok) { setErr(r?.error || "Setup failed"); setLoading(false); return; }
+        // Step 2: create the first Admin account via /api/auth/bootstrap
+        const b = await api("/api/auth/bootstrap", {
+          method: "POST",
+          body: JSON.stringify({ username: form.admin_user, password: form.admin_pass }),
+        });
+        if (!b || !b.ok) { setErr(b?.error || "Admin account creation failed"); setLoading(false); return; }
+        onComplete();
       } catch (e) { setErr(e.message); }
       setLoading(false);
     }
@@ -2392,9 +2400,9 @@
 
   /* ─────────── ConnectivityBanner ─────────── */
   function ConnectivityBanner({ status }) {
-    if (!status || status === "ok" || status === "connected") return null;
+    if (!status || status === "online" || status === "ok" || status === "connected") return null;
     return (
-      <div style={{background:"var(--warning)",color:"#000",padding:"8px 16px",fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:8,zIndex:100,position:"relative"}}>
+      <div style={{background:"var(--warning)",color:"#000",padding:"8px 16px",fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:8,position:"relative"}}>
         ⚠ No internet connection — Telegram sync paused. Your library is still available.
       </div>
     );
