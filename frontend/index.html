@@ -1549,10 +1549,9 @@
           body: JSON.stringify({ segments: localSegs }),
         });
         onToast("Transcript saved");
-        setLocalSegs(null); // reload from server on next fetch
+        setLocalSegs(null); // edits are now persisted — clear local override
       } catch (e) {
-        // Endpoint may not exist yet — save locally only
-        onToast("Saved locally (server endpoint pending)", "warning");
+        onToast(e.message || "Failed to save transcript", "error");
       }
       setSaving(false);
     }

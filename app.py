@@ -11233,6 +11233,57 @@ async def api_item_audio_analyze(request):
     except Exception as e:
         logger.exception("Audio analysis failed for %s", rel_path)
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+@routes.post("/api/item/{path:.*}/audio/transcript")
+async def api_item_audio_transcript_save(request):
+    """Save user-edited transcript segments back to the audio metadata store.
+
+    Accepts a JSON body with a ``segments`` list — each element must be a dict
+    with at least a ``text`` field.  Other fields (start, end, speaker, etc.)
+    are preserved as-is so the enriched payload remains intact.
+
+    The edited segments are written to ``metadata_store[path]["audio"]``
+    and immediately persisted to SQLite so edits survive a restart.
+    """
+    rel_path = request.match_info["path"]
+    denied = require_source_access_response(request, rel_path)
+    if denied:
+        return denied
+    if rel_path not in tags:
+        return web.json_response({"ok": False, "error": "File not found in index"}, status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON body"}, status=400)
+    segments = data.get("segments")
+    if not isinstance(segments, list):
+        return web.json_response({"ok": False, "error": "'segments' must be a list"}, status=400)
+    # Validate each segment has at least a text field
+    for i, seg in enumerate(segments):
+        if not isinstance(seg, dict):
+            return web.json_response({"ok": False, "error": f"Segment {i} is not an object"}, status=400)
+        if "text" not in seg:
+            return web.json_response({"ok": False, "error": f"Segment {i} missing 'text' field"}, status=400)
+    # Write into metadata_store
+    meta = metadata_store.setdefault(rel_path, {})
+    audio = meta.setdefault("audio", {})
+    audio["transcript_segments"] = segments
+    # Rebuild transcript_text and transcript_script from the edited segments
+    audio["transcript_text"] = " ".join(str(seg.get("text", "")).strip() for seg in segments if seg.get("text"))
+    audio["transcript_script"] = transcript_script_from_segments(segments, audio["transcript_text"])
+    # Persist to SQLite immediately
+    try:
+        persist_state_to_sqlite(state_ids, state_hashes, tags, scores_store, embeddings_store, metadata_store)
+    except Exception:
+        logger.exception("Failed to persist transcript edits for %s", rel_path)
+        return web.json_response({"ok": False, "error": "Transcript updated in memory but failed to persist to database"}, status=500)
+    logger.info("Transcript segments saved for %s (%d segments)", rel_path, len(segments))
+    return web.json_response({
+        "ok": True,
+        "path": rel_path,
+        "segment_count": len(segments),
+        "transcript_text": audio["transcript_text"],
+    })
+
 # ================= STATIC FILES =================
 @routes.get("/frame-preview/{video_key}/{frame_name}")
 async def serve_frame_preview(request):

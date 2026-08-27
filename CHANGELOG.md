@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.5.2 — P0 Smoke Test + Transcript Save Endpoint
+
+- Added `POST /api/item/{path}/audio/transcript` backend endpoint. Accepts edited `segments` list, validates each entry has a `text` field, writes back to `metadata_store`, rebuilds `transcript_text` and `transcript_script`, and immediately persists to SQLite. Transcript edits now survive restarts.
+- Removed "Saved locally (server endpoint pending)" warning from `TranscriptView` — save errors now surface as proper error toasts.
+- Added `docs/SMOKE_TEST.md` — comprehensive 11-section manual smoke test checklist covering install, wizard, auth, sources, AI pipeline, audio intelligence (including transcript save), library UX, AI Librarian, all pages, limp mode, and upgrade validation.
+
 ## 4.5.1 — AI Librarian + Audio Intelligence 2.0
 
 - Added AI Librarian UI: **✨ Ask AI** button in the Library topbar opens a slide-in panel with natural-language search powered by `/api/librarian/ask`. Pre-loaded example prompts, conversation history, inline result rows, and filter explanation chips.

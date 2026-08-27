@@ -13,6 +13,7 @@ Completed bundle roadmap:
 | 4.4.2 | Advanced Granular Search |
 | 4.5.0 | Foundation + Classification Core |
 | 4.5.1 | AI Librarian UI + Audio Intelligence 2.0 |
+| 4.5.2 | P0 Smoke Test + Transcript Save Endpoint |
 
 Recommended next priorities:
 
