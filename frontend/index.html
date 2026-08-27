@@ -1190,6 +1190,14 @@
                 <div className="action-row" style={{marginBottom:"16px"}}>
                   <a className="action-btn" href={item.file_url} target="_blank" rel="noreferrer">Open File</a>
                   <button className="action-btn" onClick={reprocess}>Reprocess</button>
+                  {item.audio && item.audio.transcript_status === "complete" && (item.audio.transcript_segments || []).length > 0 ? (
+                    <>
+                      <a className="action-btn" href={`/api/item/${encodeURIComponent(path)}/transcript.srt`} download>Export SRT</a>
+                      <a className="action-btn" href={`/api/item/${encodeURIComponent(path)}/transcript.vtt`} download>Export VTT</a>
+                    </>
+                  ) : (
+                    <span className="muted" style={{fontSize:"12px",alignSelf:"center"}} title="Transcript required">Export subtitles unavailable</span>
+                  )}
                 </div>
 
                 <div className="section-title">Tags</div>
@@ -1236,11 +1244,22 @@
       const [editPath, setEditPath] = useState(null);
       const [selected, setSelected] = useState([]);
       const [deleteTag, setDeleteTag] = useState("");
+      // Taxonomy / advanced filters
+      const [audioLanguage, setAudioLanguage] = useState("");
+      const [sceneComposition, setSceneComposition] = useState("");
+      const [performerPresentation, setPerformerPresentation] = useState("");
+      const [actTag, setActTag] = useState("");
+      const [showAdvanced, setShowAdvanced] = useState(false);
 
       async function load() {
         setLoading(true);
         try {
-          const res = await api(`/api/library?q=${encodeURIComponent(q)}&tag=${encodeURIComponent(tag)}&min=${encodeURIComponent(min)}&page=${page}`);
+          let url = `/api/library?q=${encodeURIComponent(q)}&tag=${encodeURIComponent(tag)}&min=${encodeURIComponent(min)}&page=${page}`;
+          if (audioLanguage) url += `&audio_language=${encodeURIComponent(audioLanguage)}`;
+          if (sceneComposition) url += `&scene_composition=${encodeURIComponent(sceneComposition)}`;
+          if (performerPresentation) url += `&performer_presentation=${encodeURIComponent(performerPresentation)}`;
+          if (actTag) url += `&act_tag=${encodeURIComponent(actTag)}`;
+          const res = await api(url);
           setData(res);
         } catch (e) {
           setFlash(e.message);
@@ -1250,7 +1269,7 @@
       }
 
       useEffect(() => { load(); }, [page]);
-      useEffect(() => { setPage(1); setSelected([]); }, [q, tag, min]);
+      useEffect(() => { setPage(1); setSelected([]); }, [q, tag, min, audioLanguage, sceneComposition, performerPresentation, actTag]);
       useEffect(() => { localStorage.setItem("telesaved_view_mode", viewMode); }, [viewMode]);
 
       function doSearch(e) {
@@ -1336,8 +1355,37 @@
                 <input className="field" value={min} onChange={e => setMin(e.target.value)} placeholder="Min score" />
                 <button className="btn" type="submit">Search</button>
               </form>
+              {showAdvanced && (
+                <div className="panel" style={{marginTop:"10px",padding:"12px"}}>
+                  <div className="section-title" style={{fontSize:"13px",marginBottom:"8px"}}>Advanced Filters</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}}>
+                    <div>
+                      <label className="label" style={{fontSize:"12px"}}>Audio Language (ISO 639-1)</label>
+                      <input className="field" value={audioLanguage} onChange={e => setAudioLanguage(e.target.value)} placeholder="e.g. en, es, fr" />
+                    </div>
+                    <div>
+                      <label className="label" style={{fontSize:"12px"}}>Scene Composition</label>
+                      <input className="field" value={sceneComposition} onChange={e => setSceneComposition(e.target.value)} placeholder="e.g. duo_mm, solo_f" />
+                    </div>
+                    <div>
+                      <label className="label" style={{fontSize:"12px"}}>Performer Presentation</label>
+                      <input className="field" value={performerPresentation} onChange={e => setPerformerPresentation(e.target.value)} placeholder="e.g. trans, female" />
+                    </div>
+                    <div>
+                      <label className="label" style={{fontSize:"12px"}}>Act Tag</label>
+                      <select className="select" value={actTag} onChange={e => setActTag(e.target.value)}>
+                        <option value="">Any act tag</option>
+                        {tagsList.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="action-row" style={{marginTop:"12px", justifyContent:"space-between"}}>
-                <button className="btn secondary" onClick={() => { setQ(""); setTag(""); setMin("0"); setPage(1); setSelected([]); }}>Clear Filters</button>
+                <div style={{display:"flex",gap:"8px"}}>
+                  <button className="btn secondary" onClick={() => { setQ(""); setTag(""); setMin("0"); setAudioLanguage(""); setSceneComposition(""); setPerformerPresentation(""); setActTag(""); setPage(1); setSelected([]); }}>Clear Filters</button>
+                  <button className="btn secondary" onClick={() => setShowAdvanced(v => !v)}>{showAdvanced ? "Hide Advanced" : "Advanced Filters"}</button>
+                </div>
                 <div className="view-toggle">
                   <button className={viewMode === "grid" ? "active" : ""} onClick={() => setViewMode("grid")}>Grid</button>
                   <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>Detailed List</button>
@@ -2309,6 +2357,8 @@
       const [tagsList, setTagsList] = useState([]);
       const [appReady, setAppReady] = useState(false);
       const [needsSetup, setNeedsSetup] = useState(false);
+      const [connectivityStatus, setConnectivityStatus] = useState("online");
+      const [connectivityToast, setConnectivityToast] = useState("");
 
       useEffect(() => {
         // Check whether first-run setup or auth bootstrap is needed.
@@ -2318,10 +2368,26 @@
               setNeedsSetup(true);
             } else {
               setAppReady(true);
+              setConnectivityStatus(res.connectivity_status || "online");
             }
           })
           .catch(() => setAppReady(true)); // If health check fails, show app anyway.
       }, []);
+
+      // Poll health every 30s to track connectivity status.
+      useInterval(() => {
+        if (!appReady) return;
+        api("/api/health")
+          .then(res => {
+            const newStatus = res.connectivity_status || "online";
+            if (connectivityStatus === "offline" && newStatus === "online") {
+              setConnectivityToast("Connection restored — sync resumed");
+              setTimeout(() => setConnectivityToast(""), 4000);
+            }
+            setConnectivityStatus(newStatus);
+          })
+          .catch(() => {});
+      }, 30000);
 
       useEffect(() => {
         if (!appReady) return;
@@ -2348,6 +2414,26 @@
 
       return (
         <div className="app">
+          {connectivityStatus === "offline" && (
+            <div style={{
+              position:"fixed",top:0,left:0,right:0,zIndex:9999,
+              background:"rgba(220,100,50,0.92)",color:"#fff",
+              padding:"8px 16px",fontSize:"13px",textAlign:"center",
+              pointerEvents:"none",
+            }}>
+              ⚠ No internet connection — Telegram sync paused. Your library is still available.
+            </div>
+          )}
+          {connectivityToast && (
+            <div style={{
+              position:"fixed",bottom:24,right:24,zIndex:9999,
+              background:"rgba(60,180,100,0.95)",color:"#fff",
+              padding:"10px 18px",borderRadius:"8px",fontSize:"13px",
+              pointerEvents:"none",
+            }}>
+              ✓ {connectivityToast}
+            </div>
+          )}
           <Sidebar
             view={view}
             setView={setView}
@@ -2355,7 +2441,7 @@
             setAdminTab={setAdminTab}
           />
 
-          <div className="main">
+          <div className="main" style={connectivityStatus === "offline" ? {paddingTop:"34px"} : {}}>
             {view === "library" && <LibraryPage flash={flash} setFlash={setFlash} tagsList={tagsList} />}
             {view === "downloads" && <DownloadsPage flash={flash} setFlash={setFlash} />}
             {view === "admin" && adminTab === "dashboard" && <AdminDashboard flash={flash} />}

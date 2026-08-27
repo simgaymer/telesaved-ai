@@ -84,6 +84,7 @@ DB_FILE = os.path.join(BASE_PATH, "telesaved.db")
 STATE_BACKEND = "sqlite"
 SETTINGS_FILE = os.path.join(BASE_PATH, "settings.json")
 FEEDBACK_FILE = os.path.join(BASE_PATH, "feedback.json")
+TAG_MAPPINGS_FILE = os.path.join(BASE_PATH, "tag_mappings.json")
 FRAME_PATH = os.path.join(BASE_PATH, "frames")
 PREVIEW_PATH = os.path.join(BASE_PATH, "previews")
 THUMB_PATH = os.path.join(BASE_PATH, "thumbs")
@@ -623,6 +624,101 @@ settings_data["privacy"].setdefault("session_timeout_minutes", 15)
 settings_data["privacy"].setdefault("privacy_blur", True)
 settings_data["privacy"].setdefault("hide_filenames", False)
 settings_data["privacy"].setdefault("require_unlock_for_delete", True)
+
+# ================= TAG MAPPINGS =================
+DEFAULT_TAG_MAPPINGS = {
+    "scene_composition": {
+        "duo_mm":      "Gay",
+        "duo_ff":      "Lesbian",
+        "duo_mf":      "Straight",
+        "group_all_m": "Gay Group",
+        "group_all_f": "Lesbian Group",
+        "group_mixed": "Group",
+        "solo_m":      "Solo Male",
+        "solo_f":      "Solo Female",
+    },
+    "pov_type": {
+        "pov": "POV",
+    },
+    "production_type": {
+        "amateur": "Amateur",
+        "professional": "Professional",
+    },
+    "setting": {
+        "outdoor": "Outdoor",
+        "public":  "Public",
+        "indoor":  "Indoor",
+    },
+    "performer_presentations": {
+        "trans": "Trans-inclusive",
+    },
+}
+
+def _load_tag_mappings():
+    """Load tag_mappings.json from BASE_PATH, creating it with defaults if absent."""
+    try:
+        if os.path.exists(TAG_MAPPINGS_FILE):
+            with open(TAG_MAPPINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    # Seed the file with defaults
+    try:
+        with open(TAG_MAPPINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_TAG_MAPPINGS, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return dict(DEFAULT_TAG_MAPPINGS)
+
+def _save_tag_mappings(mappings):
+    """Persist tag mappings dict to TAG_MAPPINGS_FILE."""
+    with open(TAG_MAPPINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(mappings, f, indent=2, ensure_ascii=False)
+
+tag_mappings = _load_tag_mappings()
+
+def get_display_tags_for_signals(ai_signals):
+    """Derive a list of human-readable display tag strings from an ai_signals dict.
+    Uses the loaded tag_mappings; returns an empty list for None/missing signals.
+    """
+    if not isinstance(ai_signals, dict):
+        return []
+    result = []
+    mappings = tag_mappings
+    # scene_composition: single string value
+    sc = ai_signals.get("scene_composition")
+    if sc and isinstance(sc, str):
+        label = mappings.get("scene_composition", {}).get(sc)
+        if label:
+            result.append(label)
+    # pov_type
+    pov = ai_signals.get("pov_type")
+    if pov and isinstance(pov, str):
+        label = mappings.get("pov_type", {}).get(pov)
+        if label:
+            result.append(label)
+    # production_type
+    pt = ai_signals.get("production_type")
+    if pt and isinstance(pt, str):
+        label = mappings.get("production_type", {}).get(pt)
+        if label:
+            result.append(label)
+    # setting
+    setting = ai_signals.get("setting")
+    if setting and isinstance(setting, str):
+        label = mappings.get("setting", {}).get(setting)
+        if label:
+            result.append(label)
+    # performer_presentations: list of strings
+    pp = ai_signals.get("performer_presentations")
+    if isinstance(pp, list):
+        pp_map = mappings.get("performer_presentations", {})
+        for p in pp:
+            label = pp_map.get(str(p))
+            if label and label not in result:
+                result.append(label)
+    return result
+
 # ================= LOCAL USERS / RBAC / SOURCE ACL =================
 AUTH_SESSION_COOKIE = "telesaved_auth_token"
 AUTH_SESSIONS = {}
@@ -1843,17 +1939,22 @@ def compute_feedback_bias():
         bias[tag] = max(-0.08, min(net * 0.01, 0.08))
     return bias
 # ================= SQLITE STATE BACKEND =================
-SQLITE_SCHEMA_VERSION = 2
+SQLITE_SCHEMA_VERSION = 3
 sqlite_lock = Lock()
 def sqlite_connect():
     conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
+def _column_exists(conn, table, column):
+    """Return True if `column` exists on `table` in the connected SQLite db."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == column for r in rows)
 def init_sqlite_db():
     """Create and migrate the SQLite metadata store.
     Schema versions:
       1 — original schema (videos, message_ids, content_hashes, app_meta)
       2 — adds ai_signals TEXT column to videos
+      3 — adds audio_language TEXT column to videos (indexed)
     """
     ensure_directory(BASE_PATH)
     with sqlite_lock:
@@ -1897,8 +1998,7 @@ def init_sqlite_db():
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_updated_at ON videos(updated_at)")
-            # ── Schema v2 migration ──────────────────────────────────────────
-            # Add ai_signals column if upgrading from v1.
+            # ── Schema migrations (additive, column-existence-guarded) ────────
             existing_version = 1
             row = conn.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
             if row:
@@ -1906,12 +2006,23 @@ def init_sqlite_db():
                     existing_version = int(row["value"])
                 except Exception:
                     existing_version = 1
-            if existing_version < 2:
+            # v2 — ai_signals column
+            if not _column_exists(conn, "videos", "ai_signals"):
                 try:
                     conn.execute("ALTER TABLE videos ADD COLUMN ai_signals TEXT")
-                    logger.info("DB migration: added ai_signals column (schema v1 → v2)")
+                    logger.info("DB migration: added ai_signals column")
                 except Exception:
-                    pass  # column already exists (idempotent)
+                    pass
+            # v3 — audio_language column
+            if not _column_exists(conn, "videos", "audio_language"):
+                try:
+                    conn.execute("ALTER TABLE videos ADD COLUMN audio_language TEXT")
+                    logger.info("DB migration: added audio_language column")
+                except Exception:
+                    pass
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_videos_audio_language ON videos(audio_language)"
+            )
             # video_tag_labels — always CREATE IF NOT EXISTS (safe for any version)
             conn.execute(
                 """
@@ -2064,6 +2175,32 @@ def get_ai_signals(rel_path):
             row = conn.execute("SELECT ai_signals FROM videos WHERE path = ?", (str(rel_path),)).fetchone()
             if row and row["ai_signals"]:
                 return json.loads(row["ai_signals"])
+    except Exception:
+        pass
+    return None
+
+def save_audio_language(rel_path, language):
+    """Write the ISO 639-1 audio_language for a single video row.
+    Called after Whisper transcription. Empty string clears the column to NULL.
+    """
+    value = str(language).strip() or None
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.execute(
+                "UPDATE videos SET audio_language = ? WHERE path = ?",
+                (value, str(rel_path)),
+            )
+            conn.commit()
+
+def get_audio_language(rel_path):
+    """Return the stored audio_language code for a video, or None."""
+    try:
+        with sqlite_connect() as conn:
+            row = conn.execute(
+                "SELECT audio_language FROM videos WHERE path = ?", (str(rel_path),)
+            ).fetchone()
+            if row:
+                return row["audio_language"]
     except Exception:
         pass
     return None
@@ -5690,8 +5827,18 @@ def parse_float_or_none(value):
         return float(value)
     except Exception:
         return None
-def item_matches_extended_filters(item, source_filter="", duration_min=None, duration_max=None,
-size_min_mb=None, size_max_mb=None):
+def item_matches_extended_filters(
+    item,
+    source_filter="",
+    duration_min=None,
+    duration_max=None,
+    size_min_mb=None,
+    size_max_mb=None,
+    audio_language=None,
+    scene_composition=None,
+    performer_presentation=None,
+    act_tag=None,
+):
     rel_path = item.get("path", "")
     file_meta = collect_file_metadata(rel_path, ensure_duration=False)
     if source_filter:
@@ -5710,9 +5857,40 @@ size_min_mb=None, size_max_mb=None):
         return False
     if size_max_mb is not None and size_mb > size_max_mb:
         return False
+    # ── Taxonomy filters ──────────────────────────────────────────────────────
+    if audio_language:
+        stored_lang = get_audio_language(rel_path) or ""
+        if stored_lang.lower() != str(audio_language).strip().lower():
+            return False
+    if scene_composition:
+        signals = get_ai_signals(rel_path) or {}
+        if str(signals.get("scene_composition") or "").lower() != str(scene_composition).strip().lower():
+            return False
+    if performer_presentation:
+        signals = get_ai_signals(rel_path) or {}
+        pp_list = [str(p).lower() for p in (signals.get("performer_presentations") or [])]
+        if str(performer_presentation).strip().lower() not in pp_list:
+            return False
+    if act_tag:
+        item_tags = item.get("tags") or get_effective_tags(rel_path)
+        if str(act_tag).strip() not in item_tags:
+            return False
     return True
-def build_library_items(q="", tag_filter="", min_score=0.0, source_filter="", duration_min=None,
-duration_max=None, size_min_mb=None, size_max_mb=None):
+
+def build_library_items(
+    q="",
+    tag_filter="",
+    min_score=0.0,
+    source_filter="",
+    duration_min=None,
+    duration_max=None,
+    size_min_mb=None,
+    size_max_mb=None,
+    audio_language=None,
+    scene_composition=None,
+    performer_presentation=None,
+    act_tag=None,
+):
     q = str(q or "").strip()
     tag_filter = str(tag_filter or "").strip()
     if not q:
@@ -5735,8 +5913,18 @@ duration_max=None, size_min_mb=None, size_max_mb=None):
         0.0), top_k=500)
     return [
         item for item in items
-        if item_matches_extended_filters(item, source_filter=source_filter, duration_min=duration_min,
-        duration_max=duration_max, size_min_mb=size_min_mb, size_max_mb=size_max_mb)
+        if item_matches_extended_filters(
+            item,
+            source_filter=source_filter,
+            duration_min=duration_min,
+            duration_max=duration_max,
+            size_min_mb=size_min_mb,
+            size_max_mb=size_max_mb,
+            audio_language=audio_language,
+            scene_composition=scene_composition,
+            performer_presentation=performer_presentation,
+            act_tag=act_tag,
+        )
     ]
 # ================= AI LIBRARIAN =================
 def normalize_librarian_text(text):
@@ -8089,6 +8277,13 @@ def analyze_audio_for_path(rel_path, force=False, transcribe=False):
         payload["transcript_raw_segment_count"] = transcript.get("raw_segment_count", 0)
         payload["transcript_speaker_mode"] = transcript.get("speaker_mode", "")
         payload["transcript_error"] = transcript.get("error", "")
+        # Persist detected language to the indexed audio_language column
+        detected_lang = transcript.get("language", "")
+        if detected_lang:
+            try:
+                save_audio_language(rel_path, detected_lang)
+            except Exception:
+                logger.warning("Could not persist audio_language for %s", rel_path)
     else:
         existing = current or {}
         payload["transcript_status"] = existing.get("transcript_status") or "not_requested"
@@ -8205,6 +8400,8 @@ def serialize_item(item):
     rel_path = item["path"]
     abs_path = find_existing_file(rel_path)
     file_meta = collect_file_metadata(rel_path, abs_path=abs_path, ensure_duration=True)
+    ai_signals = get_ai_signals(rel_path)
+    audio_language = get_audio_language(rel_path)
     return {
         "path": rel_path,
         "directory": os.path.dirname(rel_path),
@@ -8228,6 +8425,9 @@ def serialize_item(item):
         "thumb_url": f"/thumbs/{thumb_rel_path_for_file(rel_path)}",
         "preview_url": f"/previews/{preview_rel_path_for_file(rel_path)}",
         "file_url": f"/files/{rel_path}",
+        "ai_signals": ai_signals,
+        "audio_language": audio_language,
+        "display_tags": get_display_tags_for_signals(ai_signals),
     }
 def score_rows(score_map):
     rows = []
@@ -9002,9 +9202,66 @@ async def api_jobs_enqueue(request):
         return web.json_response({"ok": True, "job": job, "engine": job_engine_summary()})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=400)
+# ================= CONNECTIVITY / LIMP MODE =================
+# Global connectivity state — updated by the background poller.
+_connectivity_status = "online"   # "online" | "offline"
+_connectivity_paused_jobs = set() # job IDs auto-paused by connectivity loss
+
+async def _connectivity_poller():
+    """Background task that polls Telegram reachability and manages limp mode.
+    Uses exponential backoff: checks every 30s when online, 15s when offline.
+    """
+    global _connectivity_status, _connectivity_paused_jobs
+    backoff = 30
+    while True:
+        await asyncio.sleep(backoff)
+        if not TELEGRAM_CONFIGURED or client is None:
+            # No Telegram configured; nothing to poll.
+            continue
+        reachable = False
+        try:
+            if client.is_connected():
+                reachable = True
+            else:
+                await asyncio.wait_for(client.connect(), timeout=10)
+                reachable = client.is_connected()
+        except Exception:
+            reachable = False
+
+        if not reachable and _connectivity_status == "online":
+            # Transition: online → offline — auto-pause active jobs
+            _connectivity_status = "offline"
+            backoff = 15
+            logger.warning("Connectivity lost — entering limp mode; pausing active jobs")
+            with job_lock:
+                active_ids = [
+                    jid for jid, j in jobs.items()
+                    if j.get("status") in {"running", "queued"}
+                ]
+            for jid in active_ids:
+                update_job(jid, control="paused", status="paused", note="connectivity_lost")
+                _connectivity_paused_jobs.add(jid)
+
+        elif reachable and _connectivity_status == "offline":
+            # Transition: offline → online — resume jobs we auto-paused
+            _connectivity_status = "online"
+            backoff = 30
+            logger.info("Connectivity restored — resuming limp-mode-paused jobs")
+            to_resume = list(_connectivity_paused_jobs)
+            _connectivity_paused_jobs.clear()
+            for jid in to_resume:
+                job = get_job(jid)
+                if job and job.get("note") == "connectivity_lost" and job.get("status") == "paused":
+                    update_job(jid, control="running", status="running", note="Resumed after connectivity restored")
+
 @routes.get("/api/health")
 async def api_health(request):
-    return web.json_response({"ok": True, "version": APP_VERSION, "setup_required": not TELEGRAM_CONFIGURED})
+    return web.json_response({
+        "ok": True,
+        "version": APP_VERSION,
+        "setup_required": not TELEGRAM_CONFIGURED,
+        "connectivity_status": _connectivity_status,
+    })
 @routes.get("/api/tags")
 async def api_tags(request):
     refresh_tag_globals()
@@ -9258,6 +9515,37 @@ async def api_tags_labels_export(request):
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
+@routes.get("/api/tags/mappings")
+async def api_tags_mappings_get(request):
+    """Return current tag mappings. Loads fresh from disk each call (hot-reload)."""
+    denied = require_permission_response(request, "tags.manage")
+    if denied:
+        return denied
+    global tag_mappings
+    tag_mappings = _load_tag_mappings()
+    return web.json_response({"ok": True, "mappings": tag_mappings})
+
+@routes.post("/api/tags/mappings")
+async def api_tags_mappings_save(request):
+    """Replace tag mappings in memory and on disk."""
+    denied = require_permission_response(request, "tags.manage")
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+    mappings = data.get("mappings")
+    if not isinstance(mappings, dict):
+        return web.json_response({"ok": False, "error": "mappings must be an object"}, status=400)
+    global tag_mappings
+    try:
+        _save_tag_mappings(mappings)
+        tag_mappings = mappings
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "mappings": tag_mappings})
+
 @routes.get("/api/librarian/suggestions")
 async def api_librarian_suggestions(request):
     return web.json_response(librarian_suggestions_payload())
@@ -9332,6 +9620,10 @@ async def api_library(request):
         duration_max=parse_float_or_none(request.query.get("duration_max", "")),
         size_min_mb=parse_float_or_none(request.query.get("size_min_mb", "")),
         size_max_mb=parse_float_or_none(request.query.get("size_max_mb", "")),
+        audio_language=request.query.get("audio_language", "").strip() or None,
+        scene_composition=request.query.get("scene_composition", "").strip() or None,
+        performer_presentation=request.query.get("performer_presentation", "").strip() or None,
+        act_tag=request.query.get("act_tag", "").strip() or None,
     )
     items, sort_by, sort_dir = sort_library_items(items, sort_by=sort_by, sort_dir=sort_dir)
     paged_items, page, total_pages, total_items = paginate_items(items, page)
@@ -10414,6 +10706,78 @@ async def api_item_detail(request):
     except Exception as e:
         logger.exception("Item detail failed for %s", rel_path)
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+def _srt_timestamp(seconds):
+    """Convert float seconds to SRT timestamp format HH:MM:SS,mmm."""
+    try:
+        total_ms = int(round(float(seconds or 0) * 1000))
+    except Exception:
+        total_ms = 0
+    total_ms = max(0, total_ms)
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def _vtt_timestamp(seconds):
+    """Convert float seconds to WebVTT timestamp format HH:MM:SS.mmm."""
+    return _srt_timestamp(seconds).replace(",", ".")
+
+def _segments_to_srt(segments):
+    """Convert Whisper transcript segments list to SRT format string."""
+    lines = []
+    for i, seg in enumerate(segments or [], start=1):
+        start = _srt_timestamp(seg.get("start", 0))
+        end = _srt_timestamp(seg.get("end", 0))
+        text = str(seg.get("text") or "").strip()
+        lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    return "\n".join(lines)
+
+def _segments_to_vtt(segments):
+    """Convert Whisper transcript segments list to WebVTT format string."""
+    lines = ["WEBVTT", ""]
+    for i, seg in enumerate(segments or [], start=1):
+        start = _vtt_timestamp(seg.get("start", 0))
+        end = _vtt_timestamp(seg.get("end", 0))
+        text = str(seg.get("text") or "").strip()
+        lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    return "\n".join(lines)
+
+@routes.get("/api/item/{path:.*}/transcript.srt")
+async def api_item_transcript_srt(request):
+    rel_path = request.match_info["path"]
+    denied = require_source_access_response(request, rel_path)
+    if denied:
+        return denied
+    audio = audio_payload_for_path(rel_path)
+    segments = audio.get("transcript_segments") or []
+    if not segments:
+        return web.json_response({"ok": False, "error": "No transcript available"}, status=404)
+    filename = os.path.splitext(os.path.basename(rel_path))[0] + ".srt"
+    return web.Response(
+        text=_segments_to_srt(segments),
+        content_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@routes.get("/api/item/{path:.*}/transcript.vtt")
+async def api_item_transcript_vtt(request):
+    rel_path = request.match_info["path"]
+    denied = require_source_access_response(request, rel_path)
+    if denied:
+        return denied
+    audio = audio_payload_for_path(rel_path)
+    segments = audio.get("transcript_segments") or []
+    if not segments:
+        return web.json_response({"ok": False, "error": "No transcript available"}, status=404)
+    filename = os.path.splitext(os.path.basename(rel_path))[0] + ".vtt"
+    return web.Response(
+        text=_segments_to_vtt(segments),
+        content_type="text/vtt",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 @routes.post("/api/item/{path:.*}/notes")
 async def api_item_notes_save(request):
     rel_path = request.match_info["path"]
@@ -11024,6 +11388,7 @@ async def main():
     await site.start()
     asyncio.create_task(periodic_missing_index_sweep())
     asyncio.create_task(job_worker_loop())
+    asyncio.create_task(_connectivity_poller())
     logger.info("SPA backend listening on port 8080")
     logger.info("Current download directory: %s", get_download_directory())
     logger.info("Current auto-refresh setting: %s", get_auto_refresh())
