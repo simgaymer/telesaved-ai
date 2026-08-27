@@ -4,14 +4,18 @@ TeleSaved can analyze audio and generate timestamped transcripts through the Whi
 
 ## Triggering analysis
 
-From any video's detail page, open the **Audio** tab and click **Analyze Audio**. The analysis is queued as a background job. The tab auto-refreshes while processing.
+From any video's detail page, open the **Audio** tab and click **Analyze Audio**. The analysis is queued as a background job. The tab auto-refreshes every 3 seconds while processing.
 
-## Results
+## Results (Audio Intelligence 2.0)
 
 Once analysis completes, the Audio tab shows:
 
 - **Detected language** — ISO 639-1 code (e.g. `en`, `es`) stored as `audio_language` and filterable in advanced search.
-- **Transcript** — full timestamped text in a scrollable view.
+- **Segment count and duration** — summary metadata displayed above the transcript.
+- **Speaker labels** — segments are labelled by speaker. If the source engine provides native speaker IDs they are used; otherwise a turn-taking heuristic assigns `S1`, `S2`, etc. with colour-coded badges.
+- **Segmented transcript view** — each segment shows timestamp · speaker · text in a scrollable panel.
+- **Inline transcript editing** — double-click any segment to edit its text. Edit multiple segments then save all changes at once.
+- **Plain text toggle** — switch between segmented view and plain transcript text.
 - **Export SRT** — download a `.srt` subtitle file for use in VLC, mpv, or any media player.
 - **Export VTT** — download a `.vtt` subtitle file for web video players.
 

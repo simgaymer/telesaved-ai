@@ -691,6 +691,124 @@
       background: #0a0e14; flex-shrink: 0;
     }
 
+    /* ── AI LIBRARIAN ── */
+    .librarian-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 420px; max-width: 100vw;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      z-index: 200;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.36);
+    }
+    .librarian-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .librarian-body {
+      flex: 1; overflow-y: auto; padding: 16px 18px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .librarian-input-row {
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 8px;
+      flex-shrink: 0;
+    }
+    .librarian-bubble {
+      background: var(--panel-2);
+      border-radius: var(--radius-lg);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .librarian-bubble.user {
+      background: var(--accent-glow);
+      color: var(--accent);
+      margin-left: 32px;
+    }
+    .librarian-bubble.assistant {
+      margin-right: 32px;
+    }
+    .librarian-reasons {
+      font-size: 11px; color: var(--muted);
+      margin-top: 6px;
+      display: flex; flex-wrap: wrap; gap: 4px;
+    }
+    .librarian-chip {
+      background: var(--panel-3); color: var(--muted);
+      border-radius: 4px; padding: 2px 6px;
+      font-size: 11px;
+    }
+    .librarian-results {
+      display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
+    }
+    .librarian-result-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 10px; border-radius: var(--radius);
+      background: var(--panel-3);
+      cursor: pointer; transition: background 0.12s;
+    }
+    .librarian-result-row:hover { background: var(--panel-2); }
+    .librarian-result-thumb {
+      width: 56px; height: 34px; border-radius: 5px;
+      object-fit: cover; flex-shrink: 0; background: #0a0e14;
+    }
+    .librarian-suggestion {
+      font-size: 12px; color: var(--accent);
+      cursor: pointer; padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .librarian-suggestion:hover { text-decoration: underline; }
+    .librarian-overlay-bg {
+      position: fixed; inset: 0; z-index: 199;
+      background: rgba(0,0,0,0.3);
+    }
+
+    /* ── TRANSCRIPT ── */
+    .transcript-seg {
+      display: flex; gap: 10px;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: flex-start;
+      font-size: 13px; line-height: 1.6;
+    }
+    .transcript-ts {
+      font-size: 11px; color: var(--accent);
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0; width: 52px;
+      padding-top: 2px; cursor: default;
+    }
+    .transcript-speaker {
+      font-size: 11px; font-weight: 700;
+      color: var(--muted); flex-shrink: 0;
+      width: 70px; padding-top: 2px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .transcript-text {
+      flex: 1; min-width: 0;
+    }
+    .transcript-text.editing {
+      background: var(--panel-2);
+      border: 1px solid var(--accent);
+      border-radius: 4px; padding: 2px 6px;
+      outline: none; width: 100%;
+      font-family: inherit; font-size: 13px;
+      color: var(--text);
+    }
+    .speaker-badge {
+      display: inline-block;
+      font-size: 10px; font-weight: 700;
+      padding: 1px 6px; border-radius: 20px;
+      margin-right: 4px;
+    }
+    .speaker-1 { background: rgba(91,141,238,0.18); color: #5b8dee; }
+    .speaker-2 { background: rgba(82,193,122,0.18); color: #52c17a; }
+    .speaker-3 { background: rgba(224,155,46,0.18); color: #e09b2e; }
+    .speaker-4 { background: rgba(224,92,92,0.18);  color: #e05c5c; }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 860px) {
       .app { flex-direction: column; }
@@ -1282,19 +1400,14 @@
             ) : audioStatus.status === "queued" || audioStatus.status === "processing" ? (
               <div style={{color:"var(--warning)"}}>⏳ {audioStatus.status === "queued" ? "Queued" : "Processing"}… (auto-refreshing)</div>
             ) : audioStatus.status === "done" ? (
-              <div>
-                <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-                  <a className="btn btn-secondary btn-sm" href={`/api/item/${encoded}/transcript.srt`} download>⬇ Export SRT</a>
-                  <a className="btn btn-secondary btn-sm" href={`/api/item/${encoded}/transcript.vtt`} download>⬇ Export VTT</a>
-                  <button className="btn btn-secondary btn-sm" onClick={() => triggerAudio(true)} disabled={analyzeLoading}>Re-analyze</button>
-                </div>
-                {item.audio_language && <div style={{color:"var(--muted)",marginBottom:8}}>Language: <strong>{item.audio_language}</strong></div>}
-                {audioStatus.transcript && (
-                  <div style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:12,maxHeight:300,overflowY:"auto",fontSize:12,lineHeight:1.8,whiteSpace:"pre-wrap",color:"var(--muted)"}}>
-                    {audioStatus.transcript}
-                  </div>
-                )}
-              </div>
+              <TranscriptView
+                audioStatus={audioStatus}
+                item={item}
+                encoded={encoded}
+                analyzeLoading={analyzeLoading}
+                onReanalyze={() => triggerAudio(true)}
+                onToast={onToast}
+              />
             ) : audioStatus.status === "error" ? (
               <div>
                 <div style={{color:"var(--danger)",marginBottom:12}}>Analysis failed: {audioStatus.error || "Unknown error"}</div>
@@ -1396,6 +1509,140 @@
     );
   }
 
+
+  /* ─────────── TranscriptView ─────────── */
+  function TranscriptView({ audioStatus, item, encoded, analyzeLoading, onReanalyze, onToast }) {
+    const segments = audioStatus.transcript_segments || audioStatus.segments || [];
+    const hasSegments = segments.length > 0;
+    const speakerMode = audioStatus.transcript_speaker_mode || "";
+    const [editIdx, setEditIdx] = useState(null);
+    const [editVal, setEditVal] = useState("");
+    const [localSegs, setLocalSegs] = useState(null); // overrides if user edits
+    const [saving, setSaving] = useState(false);
+    const [viewMode, setViewMode] = useState("segments"); // "segments" | "plain"
+
+    const displaySegs = localSegs || segments;
+
+    // Colour-cycle per unique speaker name
+    const speakerColorMap = {};
+    const palette = ["speaker-1","speaker-2","speaker-3","speaker-4"];
+    let colorIdx = 0;
+    displaySegs.forEach(seg => {
+      const sp = seg.speaker || "Speaker 1";
+      if (!speakerColorMap[sp]) speakerColorMap[sp] = palette[colorIdx++ % palette.length];
+    });
+
+    function startEdit(i, text) { setEditIdx(i); setEditVal(text); }
+    function cancelEdit() { setEditIdx(null); setEditVal(""); }
+    function commitEdit(i) {
+      const updated = displaySegs.map((seg, idx) => idx === i ? {...seg, text: editVal} : seg);
+      setLocalSegs(updated);
+      setEditIdx(null);
+    }
+
+    async function saveEdits() {
+      if (!localSegs) return;
+      setSaving(true);
+      try {
+        await api(`/api/item/${encoded}/audio/transcript`, {
+          method: "POST",
+          body: JSON.stringify({ segments: localSegs }),
+        });
+        onToast("Transcript saved");
+        setLocalSegs(null); // reload from server on next fetch
+      } catch (e) {
+        // Endpoint may not exist yet — save locally only
+        onToast("Saved locally (server endpoint pending)", "warning");
+      }
+      setSaving(false);
+    }
+
+    const plainText = audioStatus.transcript_script || audioStatus.transcript_text || audioStatus.transcript || "";
+
+    return (
+      <div>
+        {/* Action bar */}
+        <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+          <a className="btn btn-secondary btn-sm" href={`/api/item/${encoded}/transcript.srt`} download>⬇ SRT</a>
+          <a className="btn btn-secondary btn-sm" href={`/api/item/${encoded}/transcript.vtt`} download>⬇ VTT</a>
+          <button className="btn btn-secondary btn-sm" onClick={onReanalyze} disabled={analyzeLoading}>🔄 Re-analyze</button>
+          {hasSegments && (
+            <>
+              <button className="btn btn-secondary btn-sm" onClick={() => setViewMode(v => v === "segments" ? "plain" : "segments")}>
+                {viewMode === "segments" ? "Plain text" : "Segmented"}
+              </button>
+              {localSegs && <button className="btn btn-primary btn-sm" onClick={saveEdits} disabled={saving}>💾 Save edits</button>}
+              {localSegs && <button className="btn btn-secondary btn-sm" onClick={() => setLocalSegs(null)}>Discard</button>}
+            </>
+          )}
+        </div>
+
+        {/* Metadata row */}
+        <div style={{display:"flex",gap:16,fontSize:12,color:"var(--muted)",marginBottom:12,flexWrap:"wrap"}}>
+          {item.audio_language && <span>🗣 Language: <strong style={{color:"var(--text)"}}>{item.audio_language}</strong></span>}
+          {audioStatus.duration_human && <span>⏱ {audioStatus.duration_human}</span>}
+          {hasSegments && <span>📝 {displaySegs.length} segment{displaySegs.length !== 1 ? "s" : ""}</span>}
+          {speakerMode === "heuristic" && <span title="Speaker labels are estimated by turn-taking heuristic, not true diarization">👤 Heuristic speakers</span>}
+          {speakerMode === "native" && <span>👤 Native speaker labels</span>}
+        </div>
+
+        {/* Segmented view */}
+        {hasSegments && viewMode === "segments" && (
+          <div style={{maxHeight:420,overflowY:"auto",background:"var(--panel-2)",borderRadius:"var(--radius)",padding:"8px 12px"}}>
+            {displaySegs.map((seg, i) => (
+              <div key={i} className="transcript-seg">
+                <span className="transcript-ts">{seg.timestamp || seg.start_human || ""}</span>
+                <span className="transcript-speaker">
+                  <span className={`speaker-badge ${speakerColorMap[seg.speaker || "Speaker 1"] || "speaker-1"}`}>
+                    {(seg.speaker || "S1").replace("Speaker ","S")}
+                  </span>
+                </span>
+                <div className="transcript-text" style={{flex:1}}>
+                  {editIdx === i ? (
+                    <textarea
+                      className="transcript-text editing"
+                      value={editVal}
+                      onChange={e => setEditVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(i); } if (e.key === "Escape") cancelEdit(); }}
+                      rows={Math.max(1, Math.ceil(editVal.length / 60))}
+                      autoFocus
+                    />
+                  ) : (
+                    <span
+                      style={{cursor:"text"}}
+                      title="Click to edit"
+                      onDoubleClick={() => startEdit(i, seg.text)}
+                    >{seg.text}</span>
+                  )}
+                </div>
+                {editIdx === i && (
+                  <div style={{display:"flex",flexDirection:"column",gap:3,marginLeft:6}}>
+                    <button className="btn btn-primary btn-sm" style={{padding:"2px 8px",fontSize:11}} onClick={() => commitEdit(i)}>✓</button>
+                    <button className="btn btn-secondary btn-sm" style={{padding:"2px 8px",fontSize:11}} onClick={cancelEdit}>✕</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Plain text fallback / toggle */}
+        {(!hasSegments || viewMode === "plain") && plainText && (
+          <div style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:12,maxHeight:360,overflowY:"auto",fontSize:12,lineHeight:1.8,whiteSpace:"pre-wrap",color:"var(--muted)"}}>
+            {plainText}
+          </div>
+        )}
+
+        {!hasSegments && !plainText && (
+          <div style={{color:"var(--muted)",fontSize:13}}>Transcript is empty.</div>
+        )}
+
+        {hasSegments && <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Double-click any segment to edit text.</div>}
+      </div>
+    );
+  }
+
+
   /* ─────────── SuggestTagInline ─────────── */
   function SuggestTagInline({ path, onToast }) {
     const [open, setOpen] = useState(false);
@@ -1426,6 +1673,143 @@
     );
   }
 
+
+  /* ─────────── AILibrarian ─────────── */
+  function AILibrarian({ onOpen, onClose }) {
+    const [messages, setMessages] = useState([]);   // [{role:"user"|"assistant", text, items, reasons}]
+    const [input, setInput] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [suggestions, setSuggestions] = useState([]);
+    const bodyRef = useRef(null);
+
+    useEffect(() => {
+      api("/api/librarian/suggestions")
+        .then(r => setSuggestions(r.suggestions || []))
+        .catch(() => {});
+    }, []);
+
+    useEffect(() => {
+      if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }, [messages]);
+
+    async function ask(prompt) {
+      const q = (prompt || input).trim();
+      if (!q) return;
+      setInput("");
+      setMessages(m => [...m, { role: "user", text: q }]);
+      setLoading(true);
+      try {
+        const r = await api("/api/librarian/ask", {
+          method: "POST",
+          body: JSON.stringify({ prompt: q }),
+        });
+        if (r && r.ok) {
+          setMessages(m => [...m, {
+            role: "assistant",
+            text: r.answer,
+            items: r.items || [],
+            reasons: r.reasons || {},
+            total: r.total_items,
+          }]);
+        } else {
+          setMessages(m => [...m, { role: "assistant", text: r?.error || "Something went wrong." }]);
+        }
+      } catch (e) {
+        setMessages(m => [...m, { role: "assistant", text: e.message }]);
+      }
+      setLoading(false);
+    }
+
+    const speakerColors = ["#5b8dee","#52c17a","#e09b2e","#e05c5c","#a78bfa","#f472b6"];
+    function reasonChips(reasons) {
+      if (!reasons || typeof reasons !== "object") return null;
+      const chips = Object.entries(reasons).filter(([,v]) => v).map(([k,v]) =>
+        `${k}: ${Array.isArray(v) ? v.join(", ") : v}`
+      );
+      if (!chips.length) return null;
+      return (
+        <div className="librarian-reasons">
+          {chips.map((c,i) => <span key={i} className="librarian-chip">{c}</span>)}
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="librarian-overlay-bg" onClick={onClose} />
+        <div className="librarian-panel">
+          <div className="librarian-header">
+            <div style={{fontWeight:700,fontSize:15}}>✨ AI Librarian</div>
+            <button className="btn btn-secondary btn-sm" onClick={onClose}>✕ Close</button>
+          </div>
+
+          <div className="librarian-body" ref={bodyRef}>
+            {/* Empty state — show suggestions */}
+            {messages.length === 0 && (
+              <div>
+                <div style={{color:"var(--muted)",fontSize:13,marginBottom:12}}>
+                  Ask me anything about your library in plain English.
+                </div>
+                {suggestions.map((s, i) => (
+                  <div key={i} className="librarian-suggestion" onClick={() => ask(s)}>{s}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Conversation */}
+            {messages.map((msg, i) => (
+              <div key={i}>
+                <div className={`librarian-bubble ${msg.role}`}>
+                  {msg.text}
+                  {msg.role === "assistant" && msg.total != null && (
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>
+                      {msg.total} result{msg.total !== 1 ? "s" : ""}
+                      {msg.items && msg.items.length < msg.total ? ` (showing ${msg.items.length})` : ""}
+                    </div>
+                  )}
+                  {msg.role === "assistant" && reasonChips(msg.reasons)}
+                </div>
+                {msg.items && msg.items.length > 0 && (
+                  <div className="librarian-results">
+                    {msg.items.slice(0,12).map(item => (
+                      <div key={item.path} className="librarian-result-row" onClick={() => { onOpen(item.path); onClose(); }}>
+                        <img className="librarian-result-thumb" src={item.thumb_url} alt={item.filename}
+                          onError={e => e.target.style.display="none"} />
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12,fontWeight:500}}>{item.filename}</div>
+                          <div style={{fontSize:11,color:"var(--muted)"}}>{item.size_human} · {item.duration ? fmt(item.duration) : "—"}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {msg.items.length > 12 && (
+                      <div style={{fontSize:11,color:"var(--muted)",textAlign:"center",padding:"4px 0"}}>+{msg.items.length-12} more</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {loading && (
+              <div className="librarian-bubble assistant" style={{color:"var(--muted)"}}>
+                <span className="wizard-spinner" /> Thinking…
+              </div>
+            )}
+          </div>
+
+          <div className="librarian-input-row">
+            <input className="field" style={{flex:1}} type="text" value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && !loading && ask()}
+              placeholder="Show me long videos tagged Oral…"
+              autoFocus />
+            <button className="btn btn-primary btn-sm" onClick={() => ask()} disabled={loading || !input.trim()}>Ask</button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+
   /* ─────────── LibraryPage ─────────── */
   function LibraryPage({ onOpen, onToast }) {
     const [items, setItems] = useState([]);
@@ -1434,6 +1818,7 @@
     const [totalPages, setTotalPages] = useState(1);
     const [loading, setLoading] = useState(false);
     const [viewMode, setViewMode] = useState("grid");
+    const [showLibrarian, setShowLibrarian] = useState(false);
     const [selected, setSelected] = useState(new Set());
     const [q, setQ] = useState("");
     const [qDraft, setQDraft] = useState("");
@@ -1509,6 +1894,9 @@
       <div style={{padding:24}}>
         {deleteTarget && <ConfirmModal message={`Move "${deleteTarget}" to trash?`} onConfirm={() => doDelete(deleteTarget)} onCancel={() => setDeleteTarget(null)} />}
 
+        {/* AI Librarian slide-in */}
+        {showLibrarian && <AILibrarian onOpen={onOpen} onClose={() => setShowLibrarian(false)} />}
+
         {/* Topbar */}
         <div className="topbar">
           <form onSubmit={handleSearch} style={{flex:1,display:"flex",gap:8}}>
@@ -1516,6 +1904,7 @@
             <button className="btn btn-primary btn-sm" type="submit">Search</button>
           </form>
           <button className="btn btn-secondary btn-sm" onClick={() => setShowFilters(f => !f)}>⚙ Filters</button>
+          <button className="btn btn-secondary btn-sm" title="AI Librarian" onClick={() => setShowLibrarian(l => !l)} style={{color:"var(--accent)"}}>✨ Ask AI</button>
           <button className="btn btn-secondary btn-sm" title="Grid view" onClick={() => setViewMode("grid")} style={{opacity: viewMode==="grid"?1:0.5}}>⊞</button>
           <button className="btn btn-secondary btn-sm" title="List view" onClick={() => setViewMode("list")} style={{opacity: viewMode==="list"?1:0.5}}>≡</button>
         </div>

@@ -1,5 +1,22 @@
 # Feature Overview
 
+## AI Librarian
+
+- Natural-language search over your library via the **✨ Ask AI** button in the Library topbar.
+- Type a plain-English question: "Show me long movies from Saved Messages", "Find videos tagged Oral sorted by newest", "Show duplicate candidates".
+- The Librarian translates the prompt into filters and semantic search, returns matching videos inline, and explains which filters it applied.
+- Results open directly in the full-page video detail view.
+- Pre-loaded example prompts shown on first open.
+- Conversation history is maintained within the session.
+
+## Audio Intelligence 2.0
+
+- **Segmented transcript view** in the Audio tab: each Whisper segment displayed as timestamp · speaker · text.
+- **Speaker labels** — colour-coded badges per speaker. Native speaker IDs from the engine are used when available; otherwise a turn-taking heuristic assigns `S1`, `S2`, etc.
+- **Inline transcript editor** — double-click any segment to edit its text. Commit with Enter or the ✓ button. Save all edits at once.
+- **Plain text toggle** — switch between segmented and plain transcript views.
+- Segment count, audio duration, and language shown in a metadata row above the transcript.
+
 ## Library and ingestion
 
 - Download videos from Telegram Saved Messages, chats, groups, and channels.
