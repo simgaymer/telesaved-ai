@@ -565,6 +565,15 @@ DEFAULT_TAG_THRESHOLDS = {
     "Movie": 0.23,
 }
 DEFAULT_NUDENET_THRESHOLD = 0.5
+
+# Seed act-tag vocabulary — added to custom_tags on first run if absent.
+ACT_TAG_SEED = [
+    "Oral", "Anal", "Vaginal", "Handjob", "Fingering",
+    "Bondage", "BDSM", "CNC", "Watersports", "PnP",
+    "Creampie", "Squirting", "Toys", "Strap-on",
+    "Threesome", "Gangbang", "Orgy",
+]
+
 DEFAULT_SETTINGS = {
     "tag_weights": DEFAULT_TAG_WEIGHTS,
     "tag_thresholds": DEFAULT_TAG_THRESHOLDS,
@@ -572,7 +581,7 @@ DEFAULT_SETTINGS = {
     "download_directory": BASE_PATH,
     "video_sources": ["me"],
     "source_profiles": {},
-    "custom_tags": [],
+    "custom_tags": list(ACT_TAG_SEED),
     "tag_metadata": {},
     "smart_collections": [],
     "automation_rules": [],
@@ -600,6 +609,13 @@ settings_data.setdefault("smart_collections", [])
 settings_data.setdefault("automation_rules", [])
 settings_data.setdefault("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD)
 settings_data.setdefault("privacy", {})
+# Seed act-tag vocabulary for existing installs upgrading to 4.5.0.
+_existing_custom = {t.lower() for t in settings_data.get("custom_tags", [])}
+for _seed_tag in ACT_TAG_SEED:
+    if _seed_tag.lower() not in _existing_custom:
+        settings_data["custom_tags"].append(_seed_tag)
+        _existing_custom.add(_seed_tag.lower())
+del _existing_custom, _seed_tag
 settings_data["privacy"].setdefault("enabled", False)
 settings_data["privacy"].setdefault("pin_hash", "")
 settings_data["privacy"].setdefault("pin_salt", "")
@@ -1315,6 +1331,10 @@ def required_permission_for_request(request):
         return "content.manage" if method != "GET" else "admin.view"
     if path.startswith("/api/personal") or path.startswith("/api/watch"):
         return "admin.view" if method == "GET" else "content.manage"
+    if path.startswith("/api/tags/suggest") and method == "POST":
+        return "tags.manage"
+    if path.startswith("/api/tags/suggestions") or path.startswith("/api/tags/migrate-labels") or path.startswith("/api/tags/labels"):
+        return "system.admin"
     if path.startswith("/api/tags") and method != "GET":
         return "tags.manage"
     if path.startswith("/api/rules"):
@@ -1892,6 +1912,34 @@ def init_sqlite_db():
                     logger.info("DB migration: added ai_signals column (schema v1 → v2)")
                 except Exception:
                     pass  # column already exists (idempotent)
+            # video_tag_labels — always CREATE IF NOT EXISTS (safe for any version)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS video_tag_labels (
+                    path TEXT NOT NULL,
+                    tag  TEXT NOT NULL,
+                    label_source TEXT NOT NULL DEFAULT 'ai_inferred',
+                    created_at   TEXT NOT NULL,
+                    PRIMARY KEY (path, tag)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vtl_label_source ON video_tag_labels(label_source)"
+            )
+            # tag_suggestions — pending user-contributed tag requests
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tag_suggestions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tag         TEXT NOT NULL,
+                    suggested_by TEXT NOT NULL,
+                    video_path  TEXT NOT NULL,
+                    created_at  TEXT NOT NULL,
+                    status      TEXT NOT NULL DEFAULT 'pending'
+                )
+                """
+            )
             conn.execute(
                 "INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SQLITE_SCHEMA_VERSION)),
@@ -2019,6 +2067,80 @@ def get_ai_signals(rel_path):
     except Exception:
         pass
     return None
+
+# ── label_source helpers ──────────────────────────────────────────────────────
+
+VALID_LABEL_SOURCES = {"ai_inferred", "user_confirmed", "user_corrected", "user_added"}
+
+def write_tag_label(rel_path, tag, label_source):
+    """Upsert a single (path, tag) row in video_tag_labels."""
+    if label_source not in VALID_LABEL_SOURCES:
+        label_source = "ai_inferred"
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(path, tag) DO UPDATE SET
+                    label_source = excluded.label_source,
+                    created_at   = excluded.created_at
+                """,
+                (str(rel_path), str(tag), label_source, now_stamp()),
+            )
+            conn.commit()
+
+def write_ai_tag_labels(rel_path, tag_list):
+    """Write ai_inferred label rows for a list of tags assigned by the AI pipeline."""
+    ts = now_stamp()
+    rows = [(str(rel_path), str(t), "ai_inferred", ts) for t in tag_list]
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(path, tag) DO NOTHING
+                """,
+                rows,
+            )
+            conn.commit()
+
+def get_tag_labels(rel_path):
+    """Return {tag: label_source} for a video. Tags not in the table are not returned."""
+    try:
+        with sqlite_connect() as conn:
+            rows = conn.execute(
+                "SELECT tag, label_source FROM video_tag_labels WHERE path = ?",
+                (str(rel_path),),
+            ).fetchall()
+            return {r["tag"]: r["label_source"] for r in rows}
+    except Exception:
+        return {}
+
+def migrate_legacy_tag_labels(rel_path, label_source="ai_inferred"):
+    """Write label rows for all tags on a video that lack one. Used by the migration tool."""
+    existing = get_tag_labels(rel_path)
+    video_tags = tags.get(str(rel_path), [])
+    new_rows = [
+        (str(rel_path), str(t), label_source, now_stamp())
+        for t in video_tags
+        if t not in existing
+    ]
+    if not new_rows:
+        return 0
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(path, tag) DO NOTHING
+                """,
+                new_rows,
+            )
+            conn.commit()
+    return len(new_rows)
 
 def write_legacy_state_snapshot(ids, hashes, tag_map, score_map, embedding_map, metadata_map):
     """Write a JSON snapshot for backups, diagnostics, and rollback tools."""
@@ -3295,6 +3417,12 @@ def fused_tag(video_path, rel_path=None):
         is_clip,
         is_movie,
     )
+    # Write ai_inferred label rows for every tag the pipeline assigned.
+    if rel_path and selected:
+        try:
+            write_ai_tag_labels(rel_path, selected)
+        except Exception as _lbl_err:
+            logger.warning("Failed to write ai tag labels for %s: %s", rel_path, _lbl_err)
     return selected, weighted_scores, emb.tolist()
 # ================= FILE LOOKUP =================
 def find_existing_file(rel_path):
@@ -8956,6 +9084,180 @@ async def api_tags_delete(request):
     refresh_tag_globals()
     save_settings()
     return web.json_response({"ok": True, "tag": tag, "removed_from": removed_from, "tags": PREDEFINED_TAGS})
+@routes.post("/api/tags/suggest")
+async def api_tags_suggest(request):
+    """Submit a new tag suggestion from Review Studio.
+    Any user with tags.manage permission may call this endpoint.
+    The suggestion enters a pending queue; an Admin must approve it before
+    the tag becomes part of the vocabulary.
+    """
+    user = auth_current_user(request)
+    data = await request.json()
+    tag = normalize_tag_name(data.get("tag") or data.get("name"))
+    video_path = str(data.get("video_path") or "").strip()
+    if not tag:
+        return web.json_response({"ok": False, "error": "Tag name cannot be blank"}, status=400)
+    if not video_path:
+        return web.json_response({"ok": False, "error": "video_path is required"}, status=400)
+    if tag.lower() in {t.lower() for t in PREDEFINED_TAGS}:
+        return web.json_response({"ok": False, "error": "Tag already exists in vocabulary"}, status=409)
+    suggested_by = (user or {}).get("username") or "unknown"
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            # Prevent duplicate pending suggestions for the same tag.
+            existing = conn.execute(
+                "SELECT id FROM tag_suggestions WHERE LOWER(tag)=LOWER(?) AND status='pending'",
+                (tag,),
+            ).fetchone()
+            if existing:
+                return web.json_response({"ok": True, "queued": True, "message": "Suggestion already pending"})
+            conn.execute(
+                "INSERT INTO tag_suggestions (tag, suggested_by, video_path, created_at, status) VALUES (?,?,?,?,?)",
+                (tag, suggested_by, video_path, now_stamp(), "pending"),
+            )
+            conn.commit()
+    logger.info("Tag suggestion submitted: '%s' by %s for %s", tag, suggested_by, video_path)
+    return web.json_response({"ok": True, "message": "Suggestion submitted for admin review"})
+
+@routes.get("/api/tags/suggestions")
+async def api_tags_suggestions_list(request):
+    """List pending tag suggestions. Admin only."""
+    status_filter = request.query.get("status", "pending")
+    with sqlite_connect() as conn:
+        rows = conn.execute(
+            "SELECT id, tag, suggested_by, video_path, created_at, status FROM tag_suggestions WHERE status=? ORDER BY id DESC",
+            (status_filter,),
+        ).fetchall()
+    return web.json_response({
+        "ok": True,
+        "suggestions": [dict(r) for r in rows],
+    })
+
+@routes.post("/api/tags/suggestions/{suggestion_id}/approve")
+async def api_tags_suggestion_approve(request):
+    """Approve a pending tag suggestion: adds it to vocabulary and records label_source."""
+    try:
+        suggestion_id = int(request.match_info["suggestion_id"])
+    except (ValueError, KeyError):
+        return web.json_response({"ok": False, "error": "Invalid suggestion id"}, status=400)
+    # Optional: allow rename on approval
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    with sqlite_connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM tag_suggestions WHERE id=? AND status='pending'",
+            (suggestion_id,),
+        ).fetchone()
+        if not row:
+            return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
+    approved_tag = normalize_tag_name(data.get("tag") or row["tag"])
+    merge_into = normalize_tag_name(data.get("merge_into") or "")
+    final_tag = merge_into if merge_into and merge_into.lower() in {t.lower() for t in PREDEFINED_TAGS} else approved_tag
+    # Add to vocabulary if not merging into an existing tag.
+    if final_tag.lower() not in {t.lower() for t in PREDEFINED_TAGS}:
+        custom = get_custom_tags()
+        custom.append(final_tag)
+        settings_data["custom_tags"] = custom
+        refresh_tag_globals()
+        save_settings()
+    # Write user_confirmed label for the originating video.
+    video_path = row["video_path"]
+    if video_path:
+        try:
+            write_tag_label(video_path, final_tag, "user_confirmed")
+        except Exception as e:
+            logger.warning("Could not write label for approved suggestion: %s", e)
+    # Mark suggestion as approved.
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            conn.execute(
+                "UPDATE tag_suggestions SET status='approved' WHERE id=?",
+                (suggestion_id,),
+            )
+            conn.commit()
+    logger.info("Tag suggestion #%d approved: '%s' → '%s'", suggestion_id, row["tag"], final_tag)
+    return web.json_response({"ok": True, "tag": final_tag, "tags": PREDEFINED_TAGS})
+
+@routes.post("/api/tags/suggestions/{suggestion_id}/reject")
+async def api_tags_suggestion_reject(request):
+    """Reject a pending tag suggestion."""
+    try:
+        suggestion_id = int(request.match_info["suggestion_id"])
+    except (ValueError, KeyError):
+        return web.json_response({"ok": False, "error": "Invalid suggestion id"}, status=400)
+    with sqlite_lock:
+        with sqlite_connect() as conn:
+            result = conn.execute(
+                "UPDATE tag_suggestions SET status='rejected' WHERE id=? AND status='pending'",
+                (suggestion_id,),
+            )
+            conn.commit()
+            if result.rowcount == 0:
+                return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
+    return web.json_response({"ok": True})
+
+@routes.post("/api/tags/migrate-labels")
+async def api_tags_migrate_labels(request):
+    """Migration assistant: bulk-write label_source rows for legacy tags that lack them.
+    Accepts:
+      { "label_source": "ai_inferred" }            — mark all legacy tags
+      { "paths": [...], "label_source": "user_confirmed" }  — mark specific videos
+    Admin only (system.admin permission enforced by the router).
+    """
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    label_source = str(data.get("label_source") or "ai_inferred")
+    if label_source not in VALID_LABEL_SOURCES:
+        return web.json_response({"ok": False, "error": f"label_source must be one of {sorted(VALID_LABEL_SOURCES)}"}, status=400)
+    paths = data.get("paths")
+    if paths is not None and not isinstance(paths, list):
+        return web.json_response({"ok": False, "error": "paths must be a list or omitted"}, status=400)
+    target_paths = paths if paths else list(tags.keys())
+    total_written = 0
+    for rel_path in target_paths:
+        try:
+            written = migrate_legacy_tag_labels(rel_path, label_source=label_source)
+            total_written += written
+        except Exception as e:
+            logger.warning("Migration failed for %s: %s", rel_path, e)
+    return web.json_response({
+        "ok": True,
+        "label_source": label_source,
+        "paths_processed": len(target_paths),
+        "labels_written": total_written,
+    })
+
+@routes.get("/api/tags/labels/export")
+async def api_tags_labels_export(request):
+    """Export all video_tag_labels rows, optionally filtered by label_source.
+    Used for training data export.
+    """
+    label_source_filter = request.query.get("label_source")
+    try:
+        with sqlite_connect() as conn:
+            if label_source_filter:
+                rows = conn.execute(
+                    "SELECT path, tag, label_source, created_at FROM video_tag_labels WHERE label_source=? ORDER BY path, tag",
+                    (label_source_filter,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT path, tag, label_source, created_at FROM video_tag_labels ORDER BY path, tag"
+                ).fetchall()
+        return web.json_response({
+            "ok": True,
+            "count": len(rows),
+            "labels": [dict(r) for r in rows],
+        })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
 @routes.get("/api/librarian/suggestions")
 async def api_librarian_suggestions(request):
     return web.json_response(librarian_suggestions_payload())
@@ -10196,8 +10498,23 @@ async def api_item_tags_save(request):
     data = await request.json()
     selected = data.get("tags", [])
     selected = sanitize_tags(selected)
-    original_tags = tags.get(rel_path, [])
+    original_tags = list(tags.get(rel_path, []))
     set_manual_override(rel_path, selected, original_tags)
+    # Write label_source rows for the user's tag changes.
+    try:
+        original_set = set(original_tags)
+        selected_set = set(selected)
+        existing_labels = get_tag_labels(rel_path)
+        for t in selected_set:
+            if t not in original_set:
+                write_tag_label(rel_path, t, "user_added")
+            elif existing_labels.get(t) == "ai_inferred":
+                write_tag_label(rel_path, t, "user_confirmed")
+        for t in original_set - selected_set:
+            if existing_labels.get(t) == "ai_inferred":
+                write_tag_label(rel_path, t, "user_corrected")
+    except Exception as _lbl_err:
+        logger.warning("Failed to write tag labels for %s: %s", rel_path, _lbl_err)
     return web.json_response({"ok": True})
 @routes.post("/api/item/{path:.*}/tags/clear")
 async def api_item_tags_clear(request):
