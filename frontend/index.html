@@ -52,6 +52,9 @@
       position: sticky;
       top: 0;
       height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
     }
 
     .brand {
@@ -896,12 +899,17 @@
     async function api(url, options = {}) {
       const res = await fetch(url, {
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         ...options
       });
 
       const contentType = res.headers.get("content-type") || "";
       const body = contentType.includes("application/json") ? await res.json() : await res.text();
 
+      if (res.status === 401) {
+        // Return auth signal objects instead of throwing so callers can handle login/bootstrap flows.
+        return body;
+      }
       if (!res.ok) {
         throw new Error(body?.error || body || "Request failed");
       }
@@ -916,7 +924,7 @@
       }, [callback, delay]);
     }
 
-    function Sidebar({ view, setView, adminTab, setAdminTab }) {
+    function Sidebar({ view, setView, adminTab, setAdminTab, onLogout, currentUser }) {
       return (
         <div className="sidebar">
           <div className="brand">
@@ -932,6 +940,13 @@
             <button className={`nav-btn ${view === "downloads" ? "active" : ""}`} onClick={() => setView("downloads")}>Downloads</button>
             <button className={`nav-btn ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}>Administration</button>
           </div>
+
+          {onLogout && (
+            <div style={{marginTop:"auto",paddingTop:"20px",borderTop:"1px solid var(--border)"}}>
+              {currentUser && <div className="muted" style={{fontSize:"12px",marginBottom:"8px",wordBreak:"break-all"}}>Signed in as <strong>{currentUser}</strong></div>}
+              <button className="nav-btn" style={{width:"100%",textAlign:"left",color:"var(--danger)"}} onClick={onLogout}>Sign Out</button>
+            </div>
+          )}
 
           {view === "admin" && (
             <div className="subnav">
@@ -2350,33 +2365,166 @@
       );
     }
 
+    function LoginPage({ bootstrapRequired, onLogin }) {
+      const [username, setUsername] = useState(bootstrapRequired ? "admin" : "");
+      const [password, setPassword] = useState("");
+      const [password2, setPassword2] = useState("");
+      const [error, setError] = useState("");
+      const [loading, setLoading] = useState(false);
+
+      async function submit(e) {
+        e.preventDefault();
+        setError("");
+        if (bootstrapRequired && password !== password2) {
+          setError("Passwords do not match");
+          return;
+        }
+        if (!password) {
+          setError("Password is required");
+          return;
+        }
+        setLoading(true);
+        try {
+          const endpoint = bootstrapRequired ? "/api/auth/bootstrap" : "/api/auth/login";
+          const res = await api(endpoint, {
+            method: "POST",
+            body: JSON.stringify({ username, password }),
+          });
+          if (res.ok) {
+            onLogin(res.user || { username });
+          } else {
+            setError(res.error || "Authentication failed");
+          }
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      return (
+        <div style={{
+          display:"flex", alignItems:"center", justifyContent:"center",
+          minHeight:"100vh", background:"var(--bg)",
+        }}>
+          <div style={{
+            background:"var(--panel)", border:"1px solid var(--border)",
+            borderRadius:"14px", padding:"40px 36px", width:"100%", maxWidth:"380px",
+            boxShadow:"var(--shadow)",
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"28px"}}>
+              <div className="brand-badge" style={{flexShrink:0}}>T</div>
+              <div>
+                <div className="brand-title">TeleSaved AI</div>
+                <div className="brand-sub">{bootstrapRequired ? "Create Admin Account" : "Sign In"}</div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="wizard-error" style={{marginBottom:"16px"}}>{error}</div>
+            )}
+
+            <form onSubmit={submit}>
+              <div className="wizard-field" style={{marginBottom:"14px"}}>
+                <div className="wizard-field-label">Username</div>
+                <input
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="wizard-field" style={{marginBottom:"14px"}}>
+                <div className="wizard-field-label">Password</div>
+                <input
+                  type="password"
+                  autoComplete={bootstrapRequired ? "new-password" : "current-password"}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+
+              {bootstrapRequired && (
+                <div className="wizard-field" style={{marginBottom:"14px"}}>
+                  <div className="wizard-field-label">Confirm Password</div>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={password2}
+                    onChange={e => setPassword2(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+
+              <button
+                className="wizard-btn wizard-btn-primary"
+                type="submit"
+                disabled={loading}
+                style={{width:"100%",marginTop:"8px"}}
+              >
+                {loading ? "Please wait…" : bootstrapRequired ? "Create Account" : "Sign In"}
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const [view, setView] = useState("library");
       const [adminTab, setAdminTab] = useState("dashboard");
       const [flash, setFlash] = useState("");
       const [tagsList, setTagsList] = useState([]);
-      const [appReady, setAppReady] = useState(false);
-      const [needsSetup, setNeedsSetup] = useState(false);
+      const [appState, setAppState] = useState("loading"); // loading | setup | bootstrap | login | ready
+      const [currentUser, setCurrentUser] = useState(null);
       const [connectivityStatus, setConnectivityStatus] = useState("online");
       const [connectivityToast, setConnectivityToast] = useState("");
 
+      async function checkAuth() {
+        try {
+          // Health tells us if first-run setup is needed.
+          const health = await api("/api/health");
+          if (health.setup_required) {
+            setAppState("setup");
+            return;
+          }
+          // Auth status tells us login/bootstrap state.
+          const auth = await api("/api/auth/status");
+          setConnectivityStatus(health.connectivity_status || "online");
+          if (auth.bootstrap_required) {
+            setAppState("bootstrap");
+          } else if (!auth.authenticated) {
+            setAppState("login");
+          } else {
+            setCurrentUser(auth.user || null);
+            setAppState("ready");
+          }
+        } catch (e) {
+          // If both calls fail (network error, etc.) show the app anyway.
+          setAppState("ready");
+        }
+      }
+
+      useEffect(() => { checkAuth(); }, []);
+
       useEffect(() => {
-        // Check whether first-run setup or auth bootstrap is needed.
-        api("/api/health")
-          .then(res => {
-            if (res.setup_required) {
-              setNeedsSetup(true);
-            } else {
-              setAppReady(true);
-              setConnectivityStatus(res.connectivity_status || "online");
-            }
-          })
-          .catch(() => setAppReady(true)); // If health check fails, show app anyway.
-      }, []);
+        if (appState !== "ready") return;
+        api("/api/tags").then(res => setTagsList(res.tags || [])).catch(() => {});
+      }, [appState]);
+
+      useEffect(() => {
+        if (!flash) return;
+        const id = setTimeout(() => setFlash(""), 4000);
+        return () => clearTimeout(id);
+      }, [flash]);
 
       // Poll health every 30s to track connectivity status.
       useInterval(() => {
-        if (!appReady) return;
+        if (appState !== "ready") return;
         api("/api/health")
           .then(res => {
             const newStatus = res.connectivity_status || "online";
@@ -2389,26 +2537,30 @@
           .catch(() => {});
       }, 30000);
 
-      useEffect(() => {
-        if (!appReady) return;
-        api("/api/tags").then(res => setTagsList(res.tags || [])).catch(() => {});
-      }, [appReady]);
-
-      useEffect(() => {
-        if (!flash) return;
-        const id = setTimeout(() => setFlash(""), 4000);
-        return () => clearTimeout(id);
-      }, [flash]);
-
-      if (needsSetup) {
-        return <SetupWizard onComplete={() => { setNeedsSetup(false); setAppReady(true); }} />;
+      async function handleLogout() {
+        try { await api("/api/auth/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+        setCurrentUser(null);
+        setAppState("login");
       }
 
-      if (!appReady) {
+      if (appState === "loading") {
         return (
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"var(--muted)",fontSize:14}}>
             Loading…
           </div>
+        );
+      }
+
+      if (appState === "setup") {
+        return <SetupWizard onComplete={() => checkAuth()} />;
+      }
+
+      if (appState === "bootstrap" || appState === "login") {
+        return (
+          <LoginPage
+            bootstrapRequired={appState === "bootstrap"}
+            onLogin={user => { setCurrentUser(user); setAppState("ready"); }}
+          />
         );
       }
 
@@ -2439,6 +2591,8 @@
             setView={setView}
             adminTab={adminTab}
             setAdminTab={setAdminTab}
+            currentUser={currentUser?.username || currentUser?.display_name || null}
+            onLogout={handleLogout}
           />
 
           <div className="main" style={connectivityStatus === "offline" ? {paddingTop:"34px"} : {}}>
