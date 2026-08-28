@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.5.6 — Tier 1 Modular Refactor: Serializers extracted
+
+- **`ARCHITECTURE.md` created** — Formal architecture spine documenting the layered-monolith → modular-monolith transition paradigm, 7 architectural decisions (AD-1 through AD-7), module dependency diagram, consistency conventions, current and target directory layout, Tier 1 extraction order, and deferred decisions. This is the build contract for all future module work.
+- **`telesaved/` package created** — `telesaved/__init__.py` establishes the package. All subsequent module extractions land here.
+- **`telesaved/serializers.py` extracted** — The entire SERIALIZERS section (350 lines of implementation) moved out of `app.py` into a purpose-built module. Functions: `serialize_item`, `score_rows`, `similar_video_items`, `tag_summary_for_paths`, `source_summary_for_paths`, `cluster_label_from_paths`, `normalized_embedding_map`, `cosine_similarity`, `build_visual_cluster_report`, `build_item_detail_payload`. Uses a `_bind()` dependency-injection pattern at startup — no circular imports, no import of `app.py`, all existing call sites in `app.py` unchanged via forwarding aliases.
+- `app.py` shrinks from 11,524 → 11,232 lines (−292 lines of implementation). All forwarding aliases are 1-line pass-throughs.
+
 ## 4.5.5 — Medium-Priority Gap Fixes
 
 - **RBAC smoke test section** — `docs/SMOKE_TEST.md` now includes a full Section 10 (RBAC and permissions) with sub-sections for Viewer, Manager, and Source ACL. Covers 15 concrete test cases: API 403 checks for unpermitted actions, Manager vs Admin boundary, source-scoped library filtering, and thumbnail/file 403 for restricted sources. Section numbering updated: Limp mode → §11, Upgrade → §12. Release gate updated to require RBAC section pass on auth-touching releases.

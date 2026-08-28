@@ -100,7 +100,7 @@ JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
 PER_PAGE = 24
-APP_VERSION = "4.5.5"
+APP_VERSION = "4.5.6"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -8406,355 +8406,63 @@ def search_audio_transcripts(query, limit=100):
             break
     return results
 # ================= SERIALIZERS =================
+# Implementation lives in telesaved/serializers.py (AD-7).
+# Bind shared state + helpers, then re-export as module-level names so all
+# existing call sites in app.py continue to work without modification.
+from telesaved import serializers as _serializers
+_serializers._bind(
+    embeddings_store=embeddings_store,
+    tags=tags,
+    scores_store=scores_store,
+    metadata_store=metadata_store,
+    APP_VERSION=APP_VERSION,
+    find_existing_file=find_existing_file,
+    collect_file_metadata=collect_file_metadata,
+    get_effective_tags=get_effective_tags,
+    get_manual_override=get_manual_override,
+    get_ai_signals=get_ai_signals,
+    get_audio_language=get_audio_language,
+    get_display_tags_for_signals=get_display_tags_for_signals,
+    watch_state_for_path=watch_state_for_path,
+    personal_state_for_path=personal_state_for_path,
+    thumb_rel_path_for_file=thumb_rel_path_for_file,
+    preview_rel_path_for_file=preview_rel_path_for_file,
+    frame_preview_urls_for_file=frame_preview_urls_for_file,
+    cached_scene_timeline=cached_scene_timeline,
+    audio_payload_for_path=audio_payload_for_path,
+    score_rows_fn=score_rows,
+    short_name=short_name,
+    human_date_from_path=human_date_from_path,
+    format_bytes=format_bytes,
+    format_duration=format_duration,
+    now_stamp=now_stamp,
+    metadata_source_label=metadata_source_label,
+)
+# Forwarding aliases — all existing call sites resolve through these names.
 def serialize_item(item):
-    rel_path = item["path"]
-    abs_path = find_existing_file(rel_path)
-    file_meta = collect_file_metadata(rel_path, abs_path=abs_path, ensure_duration=True)
-    ai_signals = get_ai_signals(rel_path)
-    audio_language = get_audio_language(rel_path)
-    return {
-        "path": rel_path,
-        "directory": os.path.dirname(rel_path),
-        "filename": short_name(rel_path),
-        "date": human_date_from_path(rel_path),
-        "tags": item.get("tags", []),
-        "score_map": item.get("score_map", {}),
-        "final_score": item.get("final_score"),
-        "semantic_score": item.get("semantic_score"),
-        "manual_override": item.get("manual_override", False),
-        "exists": file_meta["exists"],
-        "size": file_meta["size"],
-        "size_human": file_meta["size_human"],
-        "modified": file_meta["modified"],
-        "duration": file_meta["duration"],
-        "duration_human": file_meta["duration_human"],
-        "source": file_meta["source"],
-        "source_ref": file_meta["source_ref"],
-        **watch_state_for_path(rel_path),
-        **personal_state_for_path(rel_path),
-        "thumb_url": f"/thumbs/{thumb_rel_path_for_file(rel_path)}",
-        "preview_url": f"/previews/{preview_rel_path_for_file(rel_path)}",
-        "file_url": f"/files/{rel_path}",
-        "ai_signals": ai_signals,
-        "audio_language": audio_language,
-        "display_tags": get_display_tags_for_signals(ai_signals),
-    }
+    return _serializers.serialize_item(item)
+# Forwarding aliases continued — all call sites in app.py resolve unchanged.
 def score_rows(score_map):
-    rows = []
-    if not isinstance(score_map, dict):
-        return rows
-    for tag, value in score_map.items():
-        try:
-            numeric = float(value)
-        except Exception:
-            numeric = 0.0
-        rows.append({
-            "tag": tag,
-            "score": numeric,
-            "score_percent": round(max(0.0, min(numeric, 1.0)) * 100.0, 2),
-        })
-    rows.sort(key=lambda row: row["score"], reverse=True)
-    return rows
+    return _serializers.score_rows(score_map)
 def similar_video_items(rel_path, limit=8):
-    """Return visually/semantically similar videos using stored CLIP embeddings."""
-    base_vec = embeddings_store.get(rel_path)
-    if not isinstance(base_vec, list) or not base_vec:
-        return []
-    try:
-        base = np.array(base_vec, dtype="float32")
-        base_norm = float(np.linalg.norm(base))
-        if base_norm <= 0:
-            return []
-        base = base / base_norm
-    except Exception:
-        return []
-    candidates = []
-    for other_path, other_vec in embeddings_store.items():
-        if other_path == rel_path:
-            continue
-        if other_path not in tags:
-            continue
-        if not isinstance(other_vec, list) or not other_vec:
-            continue
-        try:
-            vec = np.array(other_vec, dtype="float32")
-            norm = float(np.linalg.norm(vec))
-            if norm <= 0:
-                continue
-            similarity = float(np.dot(base, vec / norm))
-            candidates.append((similarity, other_path))
-        except Exception:
-            continue
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    results = []
-    for similarity, path in candidates[:max(0, int(limit))]:
-        payload = serialize_item({
-            "path": path,
-            "tags": get_effective_tags(path),
-            "score_map": scores_store.get(path, {}),
-            "final_score": similarity,
-            "semantic_score": similarity,
-            "manual_override": get_manual_override(path) is not None,
-        })
-        payload["similarity"] = similarity
-        results.append(payload)
-    return results
+    return _serializers.similar_video_items(rel_path, limit=limit)
 def tag_summary_for_paths(paths, max_items=6):
-    counts = {}
-    for path in paths:
-        for tag in get_effective_tags(path):
-            counts[tag] = counts.get(tag, 0) + 1
-    rows = sorted(counts.items(), key=lambda item: item[1], reverse=True)
-    return [{"tag": tag, "count": count} for tag, count in rows[:max_items]]
+    return _serializers.tag_summary_for_paths(paths, max_items=max_items)
 def source_summary_for_paths(paths, max_items=6):
-    counts = {}
-    for path in paths:
-        source = metadata_source_label(metadata_store.get(path, {}) or {})
-        counts[source] = counts.get(source, 0) + 1
-    rows = sorted(counts.items(), key=lambda item: item[1], reverse=True)
-    return [{"source": source, "count": count} for source, count in rows[:max_items]]
+    return _serializers.source_summary_for_paths(paths, max_items=max_items)
 def cluster_label_from_paths(paths):
-    tags_part = tag_summary_for_paths(paths, max_items=3)
-    source_part = source_summary_for_paths(paths, max_items=1)
-    label_bits = []
-    if tags_part:
-        label_bits.append(" / ".join(row["tag"] for row in tags_part[:2]))
-    if source_part:
-        label_bits.append(source_part[0]["source"])
-    if not label_bits:
-        return "Visual Cluster"
-    return " • ".join(label_bits)
+    return _serializers.cluster_label_from_paths(paths)
 def normalized_embedding_map(limit=1000):
-    """Return normalized embeddings for indexed files that still have tags."""
-    rows = []
-    for path, vec in embeddings_store.items():
-        if path not in tags:
-            continue
-        if not isinstance(vec, list) or not vec:
-            continue
-        try:
-            arr = np.array(vec, dtype="float32")
-            norm = float(np.linalg.norm(arr))
-            if norm <= 0:
-                continue
-            rows.append((path, arr / norm))
-        except Exception:
-            continue
-        if limit and len(rows) >= int(limit):
-            break
-    return rows
+    return _serializers.normalized_embedding_map(limit=limit)
 def cosine_similarity(a, b):
-    try:
-        return float(np.dot(a, b))
-    except Exception:
-        return 0.0
+    return _serializers.cosine_similarity(a, b)
 def build_visual_cluster_report(cluster_count=8, limit=800, representative_count=8, iterations=10):
-    """Build a lightweight visual cluster report from stored CLIP embeddings.
-    This intentionally avoids optional dependencies such as scikit-learn. It uses
-    a deterministic k-means pass over normalized CLIP vectors, then returns
-    human-readable cluster cards with representative videos, tag/source breakdowns,
-    average duration, and total size.
-    """
-    try:
-        cluster_count = max(2, min(int(cluster_count), 24))
-    except Exception:
-        cluster_count = 8
-    try:
-        limit = max(25, min(int(limit), 5000))
-    except Exception:
-        limit = 800
-    try:
-        representative_count = max(3, min(int(representative_count), 24))
-    except Exception:
-        representative_count = 8
-    try:
-        iterations = max(2, min(int(iterations), 25))
-    except Exception:
-        iterations = 10
-    rows = normalized_embedding_map(limit=limit)
-    total_embeddings = len([1 for path, vec in embeddings_store.items() if path in tags and isinstance(vec,
-    list) and vec])
-    if len(rows) < 2:
-        return {
-            "ok": True,
-            "version": APP_VERSION,
-            "clusters": [],
-            "summary": {
-                "indexed_embeddings": total_embeddings,
-                "used_embeddings": len(rows),
-                "cluster_count": 0,
-                "limit": limit,
-                "message": "Not enough stored embeddings are available for clustering.",
-            },
-        }
-    paths = [row[0] for row in rows]
-    matrix = np.vstack([row[1] for row in rows]).astype("float32")
-    n, dim = matrix.shape
-    k = min(cluster_count, n)
-    # Deterministic seed selection: spread initial centroids across the current
-    # ordering so repeated scans produce stable-enough cluster IDs.
-    seed_positions = np.linspace(0, n - 1, k, dtype=int)
-    centroids = matrix[seed_positions].copy()
-    assignments = np.zeros(n, dtype=int)
-    for _ in range(iterations):
-        sims = matrix @ centroids.T
-        new_assignments = np.argmax(sims, axis=1)
-        if np.array_equal(assignments, new_assignments):
-            assignments = new_assignments
-            break
-        assignments = new_assignments
-        for cluster_idx in range(k):
-            members = matrix[assignments == cluster_idx]
-            if len(members) == 0:
-                continue
-            centroid = members.mean(axis=0)
-            norm = np.linalg.norm(centroid)
-            if norm > 0:
-                centroids[cluster_idx] = centroid / norm
-    clusters = []
-    for cluster_idx in range(k):
-        member_indexes = np.where(assignments == cluster_idx)[0]
-        if len(member_indexes) == 0:
-            continue
-        centroid = centroids[cluster_idx]
-        scored_members = []
-        total_size = 0
-        duration_total = 0.0
-        duration_count = 0
-        existing_count = 0
-        missing_count = 0
-        member_paths = [paths[int(i)] for i in member_indexes]
-        for i in member_indexes:
-            path = paths[int(i)]
-            score = cosine_similarity(matrix[int(i)], centroid)
-            scored_members.append((score, path))
-            file_meta = collect_file_metadata(path, ensure_duration=False)
-            if file_meta.get("exists"):
-                existing_count += 1
-            else:
-                missing_count += 1
-            try:
-                total_size += int(file_meta.get("size") or 0)
-            except Exception:
-                pass
-            try:
-                dur = float(file_meta.get("duration") or 0.0)
-                if dur > 0:
-                    duration_total += dur
-                    duration_count += 1
-            except Exception:
-                pass
-        scored_members.sort(key=lambda item: item[0], reverse=True)
-        representatives = []
-        for score, path in scored_members[:representative_count]:
-            payload = serialize_item({
-                "path": path,
-                "tags": get_effective_tags(path),
-                "score_map": scores_store.get(path, {}),
-                "final_score": score,
-                "semantic_score": score,
-                "manual_override": get_manual_override(path) is not None,
-            })
-            payload["cluster_similarity"] = score
-            representatives.append(payload)
-        avg_duration = duration_total / duration_count if duration_count else 0.0
-        clusters.append({
-            "id": f"cluster-{cluster_idx + 1}",
-            "title": cluster_label_from_paths(member_paths),
-            "count": int(len(member_paths)),
-            "representatives": representatives,
-            "tags": tag_summary_for_paths(member_paths, max_items=8),
-            "sources": source_summary_for_paths(member_paths, max_items=8),
-            "average_duration": avg_duration,
-            "average_duration_human": format_duration(avg_duration),
-            "total_size": int(total_size),
-            "total_size_human": format_bytes(total_size),
-            "existing_count": existing_count,
-            "missing_count": missing_count,
-            "cohesion": round(float(np.mean([score for score, _ in scored_members])) if scored_members else
-            0.0, 4),
-        })
-    clusters.sort(key=lambda row: row["count"], reverse=True)
-    return {
-        "ok": True,
-        "version": APP_VERSION,
-        "clusters": clusters,
-        "summary": {
-            "indexed_embeddings": total_embeddings,
-            "used_embeddings": n,
-            "cluster_count": len(clusters),
-            "requested_clusters": cluster_count,
-            "limit": limit,
-            "representative_count": representative_count,
-            "iterations": iterations,
-            "generated_at": now_stamp(),
-        },
-    }
+    return _serializers.build_visual_cluster_report(
+        cluster_count=cluster_count, limit=limit,
+        representative_count=representative_count, iterations=iterations,
+    )
 def build_item_detail_payload(rel_path, include_similar=True):
-    if rel_path not in tags:
-        raise FileNotFoundError("File not found in index")
-    abs_path = find_existing_file(rel_path)
-    file_meta = collect_file_metadata(rel_path, abs_path=abs_path, ensure_duration=True)
-    meta = metadata_store.setdefault(rel_path, {})
-    effective_tags = get_effective_tags(rel_path)
-    manual_override = get_manual_override(rel_path)
-    score_map = scores_store.get(rel_path, {})
-    item = serialize_item({
-        "path": rel_path,
-        "tags": effective_tags,
-        "score_map": score_map,
-        "manual_override": manual_override is not None,
-    })
-    item.update({
-        "ok": True,
-        "effective_tags": effective_tags,
-        "stored_tags": tags.get(rel_path, []),
-        "manual_override_detail": manual_override,
-        "score_rows": score_rows(score_map),
-        **watch_state_for_path(rel_path),
-        **personal_state_for_path(rel_path),
-        "metadata": meta,
-        "notes": str(meta.get("notes") or ""),
-        "absolute_path": abs_path or "",
-        "exists": file_meta.get("exists", False),
-        "size": file_meta.get("size", 0),
-        "size_human": file_meta.get("size_human", "0 B"),
-        "modified": file_meta.get("modified", ""),
-        "duration": file_meta.get("duration", 0.0),
-        "duration_human": file_meta.get("duration_human", "—"),
-        "source": file_meta.get("source", "Saved Messages"),
-        "source_ref": file_meta.get("source_ref", ""),
-        "frame_urls": frame_preview_urls_for_file(rel_path),
-        "scene_timeline": cached_scene_timeline(rel_path),
-        "audio": audio_payload_for_path(rel_path),
-        "telegram": meta.get("telegram") if isinstance(meta.get("telegram"), dict) else {},
-        "telegram_link": meta.get("telegram_link", ""),
-        "telegram_metadata_file": meta.get("telegram_metadata_file", ""),
-        "telegram_metadata_captured_at": meta.get("telegram_metadata_captured_at", ""),
-        "telegram_sender_name": meta.get("telegram_sender_name", ""),
-        "telegram_sender_username": meta.get("telegram_sender_username", ""),
-        "telegram_sender_id": meta.get("telegram_sender_id", ""),
-        "telegram_caption": meta.get("telegram_caption", ""),
-        "telegram_forward_from": meta.get("telegram_forward_from", ""),
-        "telegram_reply_to_msg_id": meta.get("telegram_reply_to_msg_id", ""),
-        "telegram_grouped_id": meta.get("telegram_grouped_id", ""),
-        "telegram_views": meta.get("telegram_views", 0),
-        "telegram_forwards": meta.get("telegram_forwards", 0),
-        "telegram_reaction_count": meta.get("telegram_reaction_count", 0),
-        "message_id": meta.get("message_id", ""),
-        "message_key": meta.get("message_key", ""),
-        "message_date": meta.get("message_date", ""),
-        "downloaded_at": meta.get("downloaded_at", ""),
-        "original_filename": meta.get("original_filename", short_name(rel_path)),
-        "sha256": meta.get("sha256", ""),
-        "renamed_at": meta.get("renamed_at", ""),
-        "restored_at": meta.get("restored_at", ""),
-    })
-    if include_similar:
-        item["similar"] = similar_video_items(rel_path, limit=8)
-    else:
-        item["similar"] = []
-    return item
+    return _serializers.build_item_detail_payload(rel_path, include_similar=include_similar)
 # ================= API ROUTES =================
 routes = web.RouteTableDef()
 # ================= AUTH / RBAC ROUTES =================

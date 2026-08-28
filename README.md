@@ -4,7 +4,7 @@ TeleSaved AI is a self-hosted Telegram video archiving, indexing, tagging, revie
 
 It downloads videos from selected Telegram sources, stores them in a local vault, generates thumbnails and previews, applies AI-assisted classification and tagging, supports semantic and granular search, and provides administrative tools for source management, cleanup, duplicates, transcripts, backups, user access control, and library maintenance.
 
-Current source version: **4.5.4 — High-Priority Security + Reliability Fixes**.
+Current source version: **4.5.6 — Tier 1 Modular Refactor: Serializers extracted**.
 
 > **Legal notice:** TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user.
 

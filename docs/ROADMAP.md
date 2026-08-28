@@ -17,6 +17,7 @@ Completed bundle roadmap:
 | 4.5.3 | P1 Stabilisation + Gap Fixes |
 | 4.5.4 | High-Priority Security + Reliability Fixes |
 | 4.5.5 | Medium-Priority Gap Fixes |
+| 4.5.6 | Tier 1 Modular Refactor — Serializers extracted |
 
 Recommended next priorities:
 
