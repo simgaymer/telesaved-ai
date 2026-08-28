@@ -100,7 +100,7 @@ JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
 PER_PAGE = 24
-APP_VERSION = "4.5.4"
+APP_VERSION = "4.5.5"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -10533,7 +10533,10 @@ async def api_admin_backups_download(request):
     filename = safe_id(request.match_info["filename"])
     if not filename.endswith(".zip"):
         return web.Response(status=400, text="Invalid backup filename")
-    path = safe_join(BACKUP_PATH, filename)
+    try:
+        path = safe_join(BACKUP_PATH, filename)
+    except ValueError:
+        return web.Response(status=403, text="Forbidden")
     if not os.path.exists(path):
         return web.Response(status=404, text="Backup not found")
     return web.FileResponse(path)

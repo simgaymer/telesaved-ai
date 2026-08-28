@@ -16,6 +16,7 @@ Completed bundle roadmap:
 | 4.5.2 | P0 Smoke Test + Transcript Save Endpoint |
 | 4.5.3 | P1 Stabilisation + Gap Fixes |
 | 4.5.4 | High-Priority Security + Reliability Fixes |
+| 4.5.5 | Medium-Priority Gap Fixes |
 
 Recommended next priorities:
 

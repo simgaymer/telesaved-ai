@@ -51,7 +51,7 @@ chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
 
 # Install on target system
-sudo apt install ./dist/telesaved-ai_4.5.4_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.5_all.deb
 ```
 
 After installation:
@@ -92,7 +92,7 @@ The `base_path` is where TeleSaved stores state, logs, thumbnails, previews, tra
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.5.4_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.5_all.deb
 ```
 
 The package creates a dedicated non-root `telesaved` system user, installs the Python venv on first install, and registers a systemd service.

@@ -35,7 +35,7 @@ Build the package from the repository root:
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.5.4_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.5_all.deb
 ```
 
 The package:
@@ -92,6 +92,18 @@ On first launch with no `config.json`, TeleSaved automatically shows the setup w
 4. **Admin account** — username and password for the initial Admin user.
 
 After completing the wizard, add a Telegram source under Administration → Sources.
+
+### Air-gapped or offline installation
+
+Step 2 makes a live outbound connection to Telegram to validate your credentials. On isolated networks this will time out and block the wizard.
+
+To bypass the live validation:
+
+1. Enter your Telegram **API ID** and **API hash** (phone number is optional for skip mode).
+2. Click **"Skip validation (offline / air-gapped) →"** — the small link below the main button.
+3. Complete the vault path and admin account steps normally.
+
+> **Note:** Skipping validation does not disable Telegram sync — it only skips the connectivity check during setup. TeleSaved will attempt to connect to Telegram on first sync. If the credentials are wrong, sync jobs will fail with an `API_ID_INVALID` or `AUTH_KEY` error in the Logs panel.
 
 ## Upgrade notes
 

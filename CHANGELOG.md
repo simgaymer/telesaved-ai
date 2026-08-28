@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.5.5 — Medium-Priority Gap Fixes
+
+- **RBAC smoke test section** — `docs/SMOKE_TEST.md` now includes a full Section 10 (RBAC and permissions) with sub-sections for Viewer, Manager, and Source ACL. Covers 15 concrete test cases: API 403 checks for unpermitted actions, Manager vs Admin boundary, source-scoped library filtering, and thumbnail/file 403 for restricted sources. Section numbering updated: Limp mode → §11, Upgrade → §12. Release gate updated to require RBAC section pass on auth-touching releases.
+- **Safe-path audit complete** — `api_admin_backups_download` was the remaining route where `safe_join()` lacked a `try/except ValueError` guard. Now returns 403 on traversal attempts, matching all other static-serving routes.
+- **Air-gapped / offline setup wizard** — Step 2 now has a secondary "Skip validation (offline / air-gapped) →" button (muted, below the primary Validate button). Requires API ID and hash to be filled; advances to step 3 without the Telegram round-trip. Documented in `docs/INSTALLATION.md` (new "Air-gapped or offline installation" subsection) and `docs/TROUBLESHOOTING.md` (new "Setup wizard times out on step 2" section).
+- `APP_VERSION` → `4.5.5`; sidebar badge, README, ROADMAP, INSTALLATION.md updated.
+
 ## 4.5.4 — High-Priority Security + Reliability Fixes
 
 - **SRI integrity attributes** — All three CDN scripts (React 18.3.1, ReactDOM 18.3.1, Babel Standalone 8.0.4) pinned to exact versions with `integrity="sha384-…"` and `crossorigin="anonymous"`. Browser will refuse to execute any tampered or substituted script. Closes the supply-chain / CDN-outage risk.

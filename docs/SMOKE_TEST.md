@@ -4,7 +4,7 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 
 ## Environment
 
-- **Package:** `dist/telesaved-ai_4.5.1_all.deb`
+- **Package:** `dist/telesaved-ai_4.5.4_all.deb`
 - **Tester:**
 - **Date:**
 - **Host OS:**
@@ -147,28 +147,64 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 | 9.12 | Admin → Users → create user → log in as them | New user can authenticate | |
 | 9.13 | Admin → Logs → view | Log text renders | |
 
----
 
-## 10. Limp mode
+## 10. RBAC and permissions
 
-| # | Check | Expected | Result |
-|---|-------|----------|--------|
-| 10.1 | Block outbound traffic (firewall or disconnect) | Connectivity banner appears within 60s | |
-| 10.2 | Active jobs show as paused | Jobs page shows `paused` status | |
-| 10.3 | Library remains browsable | Search, detail, playback all work | |
-| 10.4 | Restore connectivity | Banner disappears, jobs resume | |
+> Log in as each role in turn. Use the Admin account to create each test user first (Administration → Users → Create User).
 
----
-
-## 11. Upgrade from 4.4.x
+### 10A. Viewer (Users group)
 
 | # | Check | Expected | Result |
 |---|-------|----------|--------|
-| 11.1 | Install over existing 4.4.x deployment | Service restarts cleanly | |
-| 11.2 | `SELECT audio_language FROM videos LIMIT 1` | No SQL error (column migrated) | |
-| 11.3 | `SELECT ai_signals FROM videos LIMIT 1` | No SQL error (column migrated) | |
-| 11.4 | `SELECT * FROM video_tag_labels LIMIT 1` | No SQL error (table migrated) | |
-| 11.5 | Existing library items still visible | No data loss | |
+| 10A.1 | Log in as Viewer | Library loads | |
+| 10A.2 | Sidebar shows no Administration link | Admin section hidden | |
+| 10A.3 | `GET /api/admin/stats` while logged in as Viewer | `403 Forbidden` | |
+| 10A.4 | `POST /api/tags/approve/{id}` while logged in as Viewer | `403 Forbidden` | |
+| 10A.5 | `DELETE /api/item/{path}` while logged in as Viewer | `403 Forbidden` | |
+| 10A.6 | `POST /api/users` while logged in as Viewer | `403 Forbidden` | |
+| 10A.7 | `GET /api/library` while logged in as Viewer | `200 OK`, items from allowed sources only | |
+
+### 10B. Manager group
+
+| # | Check | Expected | Result |
+|---|-------|----------|--------|
+| 10B.1 | Log in as Manager | Library and Administration (limited) both accessible | |
+| 10B.2 | Manager can access Administration → Tag Management | Page renders, suggestions approvable | |
+| 10B.3 | Manager can approve a tag suggestion | Tag moves to vocabulary | |
+| 10B.4 | `POST /api/users` while logged in as Manager | `403 Forbidden` (user management is Admin-only) | |
+| 10B.5 | `POST /api/sources` while logged in as Manager | `200 OK` (sources.manage granted) | |
+
+### 10C. Source ACL
+
+| # | Check | Expected | Result |
+|---|-------|----------|--------|
+| 10C.1 | Create a source, grant access to Viewer only | Admin can see source; Viewer can also see it | |
+| 10C.2 | Create a second source, grant to Admin only | Viewer library shows no items from second source | |
+| 10C.3 | `GET /files/{path-from-restricted-source}` as Viewer | `403 Forbidden` | |
+| 10C.4 | `GET /thumbs/{thumb-from-restricted-source}` as Viewer | `403 Forbidden` | |
+
+---
+
+## 11. Limp mode
+
+| # | Check | Expected | Result |
+|---|-------|----------|--------|
+| 11.1 | Block outbound traffic (firewall or disconnect) | Connectivity banner appears within 60s | |
+| 11.2 | Active jobs show as paused | Jobs page shows `paused` status | |
+| 11.3 | Library remains browsable | Search, detail, playback all work | |
+| 11.4 | Restore connectivity | Banner disappears, jobs resume | |
+
+---
+
+## 12. Upgrade from 4.4.x
+
+| # | Check | Expected | Result |
+|---|-------|----------|--------|
+| 12.1 | Install over existing 4.4.x deployment | Service restarts cleanly | |
+| 12.2 | `SELECT audio_language FROM videos LIMIT 1` | No SQL error (column migrated) | |
+| 12.3 | `SELECT ai_signals FROM videos LIMIT 1` | No SQL error (column migrated) | |
+| 12.4 | `SELECT * FROM video_tag_labels LIMIT 1` | No SQL error (table migrated) | |
+| 12.5 | Existing library items still visible | No data loss | |
 
 ---
 
@@ -179,4 +215,4 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 | Developer | | | |
 | QA / Owner | | | |
 
-**Release gate:** All P0 items (sections 1–3, 6.10, 7.9) must pass before merging to `main`.
+**Release gate:** All P0 items (sections 1–3, 6.10, 7.9) must pass before merging to `main`. Section 10 (RBAC) must pass before any release that touches auth, permissions, or user management.

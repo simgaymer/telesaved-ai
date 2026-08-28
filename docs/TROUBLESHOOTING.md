@@ -98,6 +98,18 @@ TeleSaved uses `ffprobe`. Confirm FFmpeg is installed:
 ffprobe -version
 ```
 
+## Setup wizard times out on step 2 (air-gapped / offline systems)
+
+Step 2 of the setup wizard makes a live outbound connection to Telegram to validate your API credentials. On isolated or air-gapped networks this will time out after 10 seconds.
+
+**Workaround:** Use the offline bypass:
+
+1. Enter your **API ID** and **API hash** on step 2 (phone number not required for skip).
+2. Click **"Skip validation (offline / air-gapped) →"** — the small link beneath the "Validate & Continue" button.
+3. Continue through the vault path and admin account steps as normal.
+
+Telegram sync will be unavailable until network access is restored. Jobs requiring Telegram will fail until the service can reach the Telegram API.
+
 ## tag_mappings.json not loading
 
 The file must be valid JSON and must exist in `base_path`. Verify:
