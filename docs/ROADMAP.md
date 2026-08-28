@@ -15,6 +15,7 @@ Completed bundle roadmap:
 | 4.5.1 | AI Librarian UI + Audio Intelligence 2.0 |
 | 4.5.2 | P0 Smoke Test + Transcript Save Endpoint |
 | 4.5.3 | P1 Stabilisation + Gap Fixes |
+| 4.5.4 | High-Priority Security + Reliability Fixes |
 
 Recommended next priorities:
 

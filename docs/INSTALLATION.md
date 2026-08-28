@@ -35,7 +35,7 @@ Build the package from the repository root:
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.5.3_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.4_all.deb
 ```
 
 The package:

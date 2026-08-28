@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.5.4 — High-Priority Security + Reliability Fixes
+
+- **SRI integrity attributes** — All three CDN scripts (React 18.3.1, ReactDOM 18.3.1, Babel Standalone 8.0.4) pinned to exact versions with `integrity="sha384-…"` and `crossorigin="anonymous"`. Browser will refuse to execute any tampered or substituted script. Closes the supply-chain / CDN-outage risk.
+- **Safe-path hardening** — `/previews/` and `/thumbs/` static-file routes now wrap `safe_abs_path()` in `try/except ValueError` (matching the existing pattern on `/files/` and `/scenes/`). Path traversal attempts now return 403 instead of an unhandled 500.
+- **FAISS rebuild warning** — `build_faiss_index()` now emits a `WARNING` log when the index holds >5,000 vectors, reminding operators that rebuilds are in-memory only and take longer at scale. Startup log also announces the embedding count before the rebuild begins.
+- **Auth error state** — `checkAuth()` now retries twice (2-second delay between attempts) before giving up, so a backend that is still starting doesn't immediately drop the UI to login. After retries are exhausted, a new `"error"` app state renders a "Cannot connect to TeleSaved" screen with a **Retry** button and the actual error message, rather than silently falling through to the login page.
+
 ## 4.5.3 — P1 Stabilisation + Gap Fixes
 
 - Fixed `api()` helper to throw `AuthError` on 401 responses instead of silently returning the error body; `App()` now catches `AuthError` in `checkAuth()` and the connectivity poller and redirects to the login screen.

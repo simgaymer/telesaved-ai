@@ -100,7 +100,7 @@ JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
 PER_PAGE = 24
-APP_VERSION = "4.5.3"
+APP_VERSION = "4.5.4"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -3714,8 +3714,18 @@ def build_faiss_index():
     vecs = np.vstack(vectors).astype("float32")
     index = faiss.IndexFlatIP(vecs.shape[1])
     index.add(vecs)
-    logger.info("FAISS index rebuilt with %d vectors", len(valid_keys))
+    n = len(valid_keys)
+    logger.info("FAISS index rebuilt with %d vectors", n)
+    if n > 5000:
+        logger.warning(
+            "FAISS index holds %d vectors — rebuild time may be noticeable on restart. "
+            "Consider enabling FAISS disk persistence (P2 roadmap item) to skip the rebuild.",
+            n,
+        )
     return index, valid_keys
+_n_embeddings = len(embeddings_store)
+if _n_embeddings > 0:
+    logger.info("Building FAISS index from %d stored embeddings (in-memory only — rebuilt on every restart)…", _n_embeddings)
 faiss_index, faiss_keys = build_faiss_index()
 # ================= SEARCH =================
 def search(query, filter_tag=None, min_score=0.0, top_k=250):
@@ -11344,7 +11354,10 @@ async def serve_preview(request):
         denied = require_source_access_response(request, rel_guess)
         if denied:
             return denied
-    preview_abs = safe_abs_path(name, PREVIEW_PATH)
+    try:
+        preview_abs = safe_abs_path(name, PREVIEW_PATH)
+    except ValueError:
+        return web.Response(status=403, text="Forbidden")
     if not os.path.exists(preview_abs):
         return web.Response(status=404, text="Preview not found")
     return web.FileResponse(preview_abs)
@@ -11356,7 +11369,10 @@ async def serve_thumb(request):
         denied = require_source_access_response(request, rel_guess)
         if denied:
             return denied
-    thumb_abs = safe_abs_path(name, THUMB_PATH)
+    try:
+        thumb_abs = safe_abs_path(name, THUMB_PATH)
+    except ValueError:
+        return web.Response(status=403, text="Forbidden")
     if not os.path.exists(thumb_abs):
         return web.Response(status=404, text="Thumbnail not found")
     return web.FileResponse(thumb_abs)
