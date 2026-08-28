@@ -14,16 +14,17 @@ Completed bundle roadmap:
 | 4.5.0 | Foundation + Classification Core |
 | 4.5.1 | AI Librarian UI + Audio Intelligence 2.0 |
 | 4.5.2 | P0 Smoke Test + Transcript Save Endpoint |
+| 4.5.3 | P1 Stabilisation + Gap Fixes |
 
 Recommended next priorities:
 
-1. Stabilization and regression cleanup.
+1. FAISS disk persistence (checkpoint on shutdown + `faiss.write_index` on startup).
 2. SSO/OIDC integration.
-3. Audio Intelligence 2.0 with diarization and transcript editor.
+3. CDN vendoring — bundle React/Babel/ReactDOM into `.deb` static assets (removes CDN dependency).
 4. Media Health and Repair Center.
-5. Performance optimization.
-6. Installer/package hardening.
-7. Admin audit log.
-8. Backup/restore 2.0.
-9. Built-in help and documentation expansion.
-10. AI Librarian UI (`/api/librarian/ask` natural language search).
+5. Performance optimization and scaling guidance (resource requirements per library size).
+6. Admin audit log.
+7. Backup/restore 2.0 — automated schedule + restore procedure.
+8. SQLite write queue abstraction (future Postgres migration path).
+9. Per-segment transcript undo (↺ icon in Audio Intelligence).
+10. `⌘K` keyboard shortcut for AI Librarian.

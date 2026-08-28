@@ -100,7 +100,7 @@ JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
 PER_PAGE = 24
-APP_VERSION = "4.5.0"
+APP_VERSION = "4.5.3"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -11201,6 +11201,9 @@ async def api_item_audio_get(request):
     if rel_path not in tags:
         return web.json_response({"ok": False, "error": "File not found in index"}, status=404)
     return web.json_response({"ok": True, "audio": audio_payload_for_path(rel_path)})
+# Per-item in-flight lock — prevents duplicate concurrent Whisper/AI jobs on the same file.
+_audio_analyze_locks: dict = {}
+
 @routes.post("/api/item/{path:.*}/audio/analyze")
 async def api_item_audio_analyze(request):
     rel_path = request.match_info["path"]
@@ -11209,12 +11212,16 @@ async def api_item_audio_analyze(request):
         return denied
     if rel_path not in tags:
         return web.json_response({"ok": False, "error": "File not found in index"}, status=404)
+    # Reject if a job for this exact file is already in flight
+    if _audio_analyze_locks.get(rel_path):
+        return web.json_response({"ok": False, "error": "Audio analysis already in progress for this item"}, status=409)
     try:
         data = await request.json()
     except Exception:
         data = {}
     force = bool(data.get("force", True))
     transcribe = bool(data.get("transcribe", False))
+    _audio_analyze_locks[rel_path] = True
     try:
         audio, job = await run_tracked_blocking_job(
             "audio",
@@ -11228,11 +11235,12 @@ async def api_item_audio_analyze(request):
             source_ref=(metadata_store.get(rel_path, {}) or {}).get("source_ref", ""),
             metadata={"path": rel_path, "force": force, "transcribe": transcribe},
         )
-        return web.json_response({"ok": True, "audio": audio, "job": job, "job_id": job.get("id") if job else
-        ""})
+        return web.json_response({"ok": True, "audio": audio, "job": job, "job_id": job.get("id") if job else ""})
     except Exception as e:
         logger.exception("Audio analysis failed for %s", rel_path)
         return web.json_response({"ok": False, "error": str(e)}, status=500)
+    finally:
+        _audio_analyze_locks.pop(rel_path, None)
 @routes.post("/api/item/{path:.*}/audio/transcript")
 async def api_item_audio_transcript_save(request):
     """Save user-edited transcript segments back to the audio metadata store.
@@ -11257,12 +11265,19 @@ async def api_item_audio_transcript_save(request):
     segments = data.get("segments")
     if not isinstance(segments, list):
         return web.json_response({"ok": False, "error": "'segments' must be a list"}, status=400)
-    # Validate each segment has at least a text field
+    # Guard against oversized payloads
+    MAX_SEGMENTS = 5000
+    if len(segments) > MAX_SEGMENTS:
+        return web.json_response({"ok": False, "error": f"Too many segments: max {MAX_SEGMENTS}"}, status=400)
+    # Validate each segment has at least a text field and a sane length
+    MAX_SEGMENT_TEXT = 10000
     for i, seg in enumerate(segments):
         if not isinstance(seg, dict):
             return web.json_response({"ok": False, "error": f"Segment {i} is not an object"}, status=400)
         if "text" not in seg:
             return web.json_response({"ok": False, "error": f"Segment {i} missing 'text' field"}, status=400)
+        if len(str(seg["text"])) > MAX_SEGMENT_TEXT:
+            return web.json_response({"ok": False, "error": f"Segment {i} text exceeds {MAX_SEGMENT_TEXT} characters"}, status=400)
     # Write into metadata_store
     meta = metadata_store.setdefault(rel_path, {})
     audio = meta.setdefault("audio", {})

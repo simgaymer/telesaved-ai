@@ -82,3 +82,71 @@ System log viewer (live tail) and feedback viewer. Logs are also available at `{
 ## Backups
 
 Metadata backups include state/config-related data, not the original media files. Maintain independent media backups.
+
+### What is backed up
+
+- `telesaved.db` — all video metadata, tags, transcripts, ratings, watch-later, personal states.
+- `config.json` — Telegram credentials and vault path.
+- `settings.json` — runtime configuration overrides.
+- `auth.json` — local user accounts and groups.
+- `tag_mappings.json` — AI signal → display tag mappings.
+
+Media files (the videos themselves) are **not** backed up — they live at `{base_path}` and must be backed up independently.
+
+### Manual backup procedure
+
+```bash
+# Stop the service (optional but safe)
+sudo systemctl stop telesaved
+
+# Copy the critical metadata files
+VAULT=/path/to/your/base_path
+BACKUP=/path/to/backup/destination/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$BACKUP"
+cp "$VAULT/telesaved.db"       "$BACKUP/"
+cp /opt/telesaved/config.json  "$BACKUP/"
+cp "$VAULT/settings.json"      "$BACKUP/" 2>/dev/null || true
+cp "$VAULT/auth.json"          "$BACKUP/" 2>/dev/null || true
+cp "$VAULT/tag_mappings.json"  "$BACKUP/" 2>/dev/null || true
+
+sudo systemctl start telesaved
+```
+
+### Restore procedure
+
+```bash
+sudo systemctl stop telesaved
+
+VAULT=/path/to/your/base_path
+BACKUP=/path/to/backup/destination/20240101-120000  # your backup folder
+
+cp "$BACKUP/telesaved.db"      "$VAULT/"
+cp "$BACKUP/config.json"       /opt/telesaved/
+cp "$BACKUP/settings.json"     "$VAULT/" 2>/dev/null || true
+cp "$BACKUP/auth.json"         "$VAULT/" 2>/dev/null || true
+cp "$BACKUP/tag_mappings.json" "$VAULT/" 2>/dev/null || true
+
+sudo systemctl start telesaved
+```
+
+### Corrupted SQLite database
+
+If `telesaved.db` becomes corrupted (service fails to start, logs show `database disk image is malformed`):
+
+```bash
+sudo systemctl stop telesaved
+
+VAULT=/path/to/your/base_path
+
+# Check integrity
+sqlite3 "$VAULT/telesaved.db" "PRAGMA integrity_check;"
+
+# Attempt recovery into a new database
+sqlite3 "$VAULT/telesaved.db" ".recover" | sqlite3 "$VAULT/telesaved-recovered.db"
+mv "$VAULT/telesaved.db" "$VAULT/telesaved.db.corrupt"
+mv "$VAULT/telesaved-recovered.db" "$VAULT/telesaved.db"
+
+sudo systemctl start telesaved
+```
+
+If recovery fails, restore from your last backup. Transcripts, tags, ratings, and watch-later history since the last backup will be lost; media files are unaffected.

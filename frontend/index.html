@@ -809,6 +809,11 @@
     .speaker-3 { background: rgba(224,155,46,0.18); color: #e09b2e; }
     .speaker-4 { background: rgba(224,92,92,0.18);  color: #e05c5c; }
 
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 860px) {
       .app { flex-direction: column; }
@@ -826,6 +831,8 @@
   const { useEffect, useRef, useState, useCallback } = React;
 
   /* ─────────── helpers ─────────── */
+  class AuthError extends Error { constructor(msg) { super(msg); this.name = "AuthError"; } }
+
   async function api(url, opts = {}) {
     const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
@@ -834,7 +841,7 @@
     });
     const ct = res.headers.get("content-type") || "";
     const body = ct.includes("application/json") ? await res.json() : await res.text();
-    if (res.status === 401) return body;   // caller handles auth signals
+    if (res.status === 401) throw new AuthError(body?.error || "Session expired");
     if (!res.ok) throw new Error(body?.error || body || "Request failed");
     return body;
   }
@@ -880,7 +887,7 @@
       <div className="sidebar">
         <div className="brand">
           <div className="brand-badge">T</div>
-          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.0</div></div>
+          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.2</div></div>
         </div>
 
         <div className="nav-section">
@@ -971,7 +978,7 @@
   }
 
   /* ─────────── ListRow ─────────── */
-  function ListRow({ item, onOpen, selected, onSelect, onDelete, sortBy, setSortBy, sortDir, setSortDir }) {
+  function ListRow({ item, onOpen, selected, onSelect, onDelete }) {
     const [src, setSrc] = useState(item.thumb_url);
     return (
       <tr onClick={() => onOpen(item.path)} style={{cursor:"pointer"}}>
@@ -983,7 +990,7 @@
             <img className="list-thumb" src={src} loading="lazy" alt={item.filename}
               onMouseEnter={() => setSrc(item.preview_url)}
               onMouseLeave={() => setSrc(item.thumb_url)}
-              onError={() => setSrc(item.thumb_url)} />
+              onError={() => setSrc("")} />
             <div>
               <div className="list-fname">{item.filename}</div>
               <div className="list-path">{item.path}</div>
@@ -1229,6 +1236,7 @@
   function ItemDetailPage({ path, onBack, onToast, permissions }) {
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [notFound, setNotFound] = useState(false);
     const [tab, setTab] = useState("tags");
     const [tagInput, setTagInput] = useState("");
     const [saving, setSaving] = useState(false);
@@ -1241,6 +1249,7 @@
 
     async function load() {
       setLoading(true);
+      setNotFound(false);
       try {
         const r = await api(`/api/item/${encoded}`);
         setItem(r);
@@ -1248,7 +1257,13 @@
         setPersonalForm({ rating: r.personal_rating || 0, notes: r.personal_notes || "", favorite: r.favorite || false });
         setWatchLater(r.watch_later || false);
         setAudioStatus(r.audio);
-      } catch (e) { onToast(e.message, "error"); }
+      } catch (e) {
+        if (e.message && (e.message.includes("404") || e.message.toLowerCase().includes("not found"))) {
+          setNotFound(true);
+        } else {
+          onToast(e.message, "error");
+        }
+      }
       setLoading(false);
     }
 
@@ -1314,7 +1329,14 @@
     }
 
     if (loading) return <div style={{padding:40,textAlign:"center",color:"var(--muted)"}}>Loading…</div>;
-    if (!item) return <div style={{padding:40,textAlign:"center",color:"var(--danger)"}}>Item not found.</div>;
+    if (notFound || !item) return (
+      <div style={{padding:40,textAlign:"center"}}>
+        <div style={{fontSize:40,marginBottom:12}}>🔍</div>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:8,color:"var(--text)"}}>Item not found</div>
+        <div style={{color:"var(--muted)",fontSize:13,marginBottom:20}}>This item may have been deleted or moved to trash.</div>
+        <button className="btn btn-secondary btn-sm" onClick={onBack}>← Back to Library</button>
+      </div>
+    );
 
     const tabs = ["tags", "audio", "scenes", "similar", "info"];
     const tabLabels = { tags: "Tags", audio: "Audio", scenes: "Scenes", similar: "Similar", info: "Info" };
@@ -1719,7 +1741,6 @@
       setLoading(false);
     }
 
-    const speakerColors = ["#5b8dee","#52c17a","#e09b2e","#e05c5c","#a78bfa","#f472b6"];
     function reasonChips(reasons) {
       if (!reasons || typeof reasons !== "object") return null;
       const chips = Object.entries(reasons).filter(([,v]) => v).map(([k,v]) =>
@@ -1969,6 +1990,21 @@
         {/* Summary */}
         <div style={{color:"var(--muted)",fontSize:12,marginBottom:12}}>{loading ? "Loading…" : `${total} videos`}</div>
 
+        {/* Loading skeleton */}
+        {loading && (
+          <div className="video-grid" aria-busy="true" aria-label="Loading library…">
+            {Array.from({length: 12}).map((_, i) => (
+              <div key={i} style={{borderRadius:"var(--radius-lg)",background:"var(--panel)",overflow:"hidden",animation:"pulse 1.4s ease-in-out infinite",animationDelay:`${i*0.07}s`}}>
+                <div style={{width:"100%",paddingBottom:"56.25%",background:"var(--panel-2)"}} />
+                <div style={{padding:"10px 12px 12px"}}>
+                  <div style={{height:12,borderRadius:4,background:"var(--panel-2)",marginBottom:8,width:"80%"}} />
+                  <div style={{height:10,borderRadius:4,background:"var(--panel-2)",width:"50%"}} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Empty state */}
         {!loading && items.length === 0 && (
           <div className="empty">
@@ -1979,7 +2015,7 @@
         )}
 
         {/* Grid view */}
-        {viewMode === "grid" && items.length > 0 && (
+        {!loading && viewMode === "grid" && items.length > 0 && (
           <div className="video-grid">
             {items.map(item => (
               <VideoCard key={item.path} item={item} onOpen={onOpen}
@@ -1990,7 +2026,7 @@
         )}
 
         {/* List view */}
-        {viewMode === "list" && items.length > 0 && (
+        {!loading && viewMode === "list" && items.length > 0 && (
           <div style={{overflowX:"auto"}}>
             <table className="lib-table">
               <thead>
@@ -2797,20 +2833,68 @@
   }
 
   /* ─────────── App ─────────── */
+  /* ─────────── hash router helpers ─────────── */
+  function parseHash() {
+    // Hash format: #/view  or  #/item/ENCODED_PATH  or  #/admin/TAB
+    const hash = window.location.hash.replace(/^#\/?/, "");
+    if (!hash) return { view: "library", adminTab: "dashboard", detailPath: null };
+    const parts = hash.split("/");
+    const view = parts[0] || "library";
+    if (view === "item") {
+      const encoded = parts.slice(1).join("/");
+      return { view: "detail", adminTab: "dashboard", detailPath: encoded ? decodeURIComponent(encoded) : null };
+    }
+    if (view === "admin") {
+      return { view: "admin", adminTab: parts[1] || "dashboard", detailPath: null };
+    }
+    return { view, adminTab: "dashboard", detailPath: null };
+  }
+
+  function buildHash(view, { adminTab, detailPath } = {}) {
+    if (view === "detail" && detailPath) return `#/item/${encodeURIComponent(detailPath)}`;
+    if (view === "admin" && adminTab) return `#/admin/${adminTab}`;
+    return `#/${view}`;
+  }
+
   function App() {
+    const initial = parseHash();
     const [appState, setAppState] = useState("loading"); // loading | setup | login | ready
     const [bootstrapRequired, setBootstrapRequired] = useState(false);
     const [currentUser, setCurrentUser] = useState(null);
     const [permissions, setPermissions] = useState([]);
     const [connectivityStatus, setConnectivityStatus] = useState(null);
-    const [view, setView] = useState("library");
-    const [adminTab, setAdminTab] = useState("dashboard");
-    const [detailPath, setDetailPath] = useState(null);
+    const [view, setViewState] = useState(initial.view);
+    const [adminTab, setAdminTabState] = useState(initial.adminTab);
+    const [detailPath, setDetailPath] = useState(initial.detailPath);
     const [toast, setToast] = useState({ message: "", type: "success" });
 
     function showToast(message, type = "success") {
       setToast({ message, type });
     }
+
+    // Keep hash in sync whenever view/adminTab/detailPath change
+    function setView(v, opts = {}) {
+      setViewState(v);
+      if (v !== "detail") setDetailPath(null);
+      const hash = buildHash(v, { adminTab: opts.adminTab || adminTab, detailPath: opts.detailPath || null });
+      window.history.pushState(null, "", hash);
+    }
+    function setAdminTab(t) {
+      setAdminTabState(t);
+      window.history.pushState(null, "", buildHash("admin", { adminTab: t }));
+    }
+
+    // Listen for browser back/forward
+    useEffect(() => {
+      function onPop() {
+        const { view: v, adminTab: t, detailPath: p } = parseHash();
+        setViewState(v);
+        setAdminTabState(t);
+        setDetailPath(p);
+      }
+      window.addEventListener("popstate", onPop);
+      return () => window.removeEventListener("popstate", onPop);
+    }, []);
 
     async function checkAuth() {
       try {
@@ -2824,20 +2908,27 @@
         setPermissions(auth.permissions || []);
         setAppState("ready");
       } catch (e) {
+        if (e instanceof AuthError) { setAppState("login"); return; }
         setAppState("login");
       }
     }
 
     useEffect(() => { checkAuth(); }, []);
 
-    // Poll connectivity
+    // Poll connectivity with exponential backoff — catch AuthError to redirect
+    const _pollBackoff = useRef(30000);
     useInterval(async () => {
       if (appState !== "ready") return;
       try {
         const h = await api("/api/health");
         setConnectivityStatus(h?.connectivity_status || null);
-      } catch {}
-    }, 30000);
+        _pollBackoff.current = 30000; // reset on success
+      } catch (e) {
+        if (e instanceof AuthError) { setAppState("login"); return; }
+        // Back off up to 5 min on repeated failures
+        _pollBackoff.current = Math.min(_pollBackoff.current * 2, 300000);
+      }
+    }, _pollBackoff.current);
 
     async function handleLogin(username) {
       setCurrentUser(username);
@@ -2849,15 +2940,18 @@
       setCurrentUser(null);
       setPermissions([]);
       setAppState("login");
+      window.history.pushState(null, "", "#/library");
     }
 
     function openItem(path) {
       setDetailPath(path);
-      setView("detail");
+      setViewState("detail");
+      window.history.pushState(null, "", buildHash("detail", { detailPath: path }));
     }
     function closeItem() {
       setDetailPath(null);
-      setView("library");
+      setViewState("library");
+      window.history.pushState(null, "", "#/library");
     }
 
     // Loading
@@ -2885,7 +2979,7 @@
     // Main app shell
     return (
       <div className="app">
-        <Sidebar view={view} setView={v => { setView(v); if (v !== "detail") setDetailPath(null); }}
+        <Sidebar view={view} setView={v => setView(v)}
           adminTab={adminTab} setAdminTab={setAdminTab}
           currentUser={currentUser} onLogout={handleLogout} />
         <div className="main">

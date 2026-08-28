@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.5.3 — P1 Stabilisation + Gap Fixes
+
+- Fixed `api()` helper to throw `AuthError` on 401 responses instead of silently returning the error body; `App()` now catches `AuthError` in `checkAuth()` and the connectivity poller and redirects to the login screen.
+- Added hash-based URL routing: `parseHash()` / `buildHash()` helpers; browser back/forward now works via `popstate` listener; deep-linking to `#/item/PATH`, `#/admin/TAB`, `#/watch-later`, etc. restores the correct view on refresh.
+- Fixed `onError` infinite reload loop in `ListRow` image tag (same pattern as the earlier `VideoCard` fix — `setSrc("")`).
+- Removed dead `speakerColors` array from `AILibrarian` component.
+- Removed dead sort props (`sortBy`, `setSortBy`, `sortDir`, `setSortDir`) from `ListRow` signature and all call sites.
+- Added segment count limit (max 5,000) and per-segment text length limit (max 10,000 chars) to `POST /api/item/{path}/audio/transcript` to prevent DoS via oversized payloads.
+- Added per-item in-flight lock on `POST /api/item/{path}/audio/analyze` to prevent duplicate concurrent Whisper/AI jobs on the same file.
+- Added exponential backoff (max 5 min) to frontend connectivity poller so a slow or restarting backend is not hammered.
+- Added item-not-found / deleted-item error state in `ItemDetailPage`: if the backend returns 404, a clear "Item not found" message is shown with a back button instead of a broken panel.
+- Single-sourced `APP_VERSION` — bumped `app.py` to `4.5.3`; README, INSTALLATION.md, and ROADMAP all updated to match.
+- Updated `docs/ROADMAP.md`: added v4.5.3 row; replaced completed items in recommended priorities with accurate next-up backlog (FAISS persistence, CDN vendoring, backup/restore 2.0, etc.).
+- Added hardware and resource requirements section to `README.md` and `docs/INSTALLATION.md`.
+- Added SQLite backup and recovery procedures to `docs/ADMINISTRATION.md` and `docs/TROUBLESHOOTING.md`.
+
 ## 4.5.2 — P0 Smoke Test + Transcript Save Endpoint
 
 - Added `POST /api/item/{path}/audio/transcript` backend endpoint. Accepts edited `segments` list, validates each entry has a `text` field, writes back to `metadata_store`, rebuilds `transcript_text` and `transcript_script`, and immediately persists to SQLite. Transcript edits now survive restarts.

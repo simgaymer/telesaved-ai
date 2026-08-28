@@ -11,7 +11,8 @@ ftfy>=6.1
 openai-whisper>=20231117
 ldap3>=2.9
 nudenet>=3.4
-# Install CPU PyTorch explicitly before the remaining ML stack when using older/unsupported GPUs:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# Install CLIP separately:
-# pip install git+https://github.com/openai/CLIP.git
+# CLIP is not on PyPI — install via git URL:
+git+https://github.com/openai/CLIP.git
+# PyTorch: the above packages pull in the default (CUDA) build.
+# For CPU-only systems install PyTorch BEFORE running pip install -r requirements.txt:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu

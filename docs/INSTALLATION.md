@@ -2,6 +2,32 @@
 
 TeleSaved AI is designed for a Debian/Ubuntu-style host and installs cleanly under `/opt/telesaved`.
 
+## System requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| OS | Debian 11 / Ubuntu 22.04 (x86\_64) | Debian 12 / Ubuntu 24.04 |
+| Python | 3.10 | 3.11+ |
+| RAM | 4 GB | 8 GB+ |
+| CPU | 2 cores | 4+ cores |
+| Disk | 20 GB free (OS + app + models) | 100 GB+ (media vault separate) |
+| FFmpeg | 4.x | 6.x |
+| GPU | Not required | CUDA GPU speeds up CLIP, NudeNet, and Whisper significantly |
+
+**AI model disk footprint (downloaded once on first use, cached in `$XDG_CACHE_HOME`):**
+
+| Model | Size |
+|-------|------|
+| CLIP ViT-B/32 | ~350 MB |
+| YOLOv8n | ~6 MB |
+| NudeNet | ~90 MB |
+| Whisper `base` (default) | ~145 MB |
+| Whisper `small` | ~465 MB |
+| Whisper `medium` | ~1.5 GB |
+| Whisper `large-v2` | ~2.9 GB |
+
+Ensure at least 5 GB free disk space beyond your vault before installing to accommodate model caches.
+
 ## Install from Debian package (recommended)
 
 Build the package from the repository root:
@@ -9,7 +35,7 @@ Build the package from the repository root:
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.5.0_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.3_all.deb
 ```
 
 The package:

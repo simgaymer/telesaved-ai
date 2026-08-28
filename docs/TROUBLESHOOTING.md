@@ -112,6 +112,26 @@ If missing, restart the service — it will be recreated with defaults.
 
 Use a local emergency Admin account. If LDAP is misconfigured, local login remains available unless explicitly disabled. The setup wizard created the initial Admin account; use those credentials.
 
+## Corrupted SQLite database
+
+If the service fails to start and logs show `database disk image is malformed` or `SQLite error`:
+
+```bash
+VAULT=/path/to/your/base_path
+
+# Check integrity first
+sqlite3 "$VAULT/telesaved.db" "PRAGMA integrity_check;"
+
+# Recover into a new database
+sqlite3 "$VAULT/telesaved.db" ".recover" | sqlite3 "$VAULT/telesaved-recovered.db"
+sudo systemctl stop telesaved
+mv "$VAULT/telesaved.db" "$VAULT/telesaved.db.corrupt"
+mv "$VAULT/telesaved-recovered.db" "$VAULT/telesaved.db"
+sudo systemctl start telesaved
+```
+
+If recovery fails, restore from a backup. See the [Backup and Restore](ADMINISTRATION.md#backups) section in the Administration Guide for the full procedure.
+
 ## Service running as root (pre-4.5.0 installs)
 
 Verify the service user after upgrading to 4.5.0:
