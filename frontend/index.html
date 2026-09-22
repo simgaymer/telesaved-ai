@@ -896,7 +896,7 @@
       <div className="sidebar">
         <div className="brand">
           <div className="brand-badge">T</div>
-          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.6</div></div>
+          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.7</div></div>
         </div>
 
         <div className="nav-section">
@@ -1226,14 +1226,14 @@
   }
 
   /* ─────────── ConfirmModal ─────────── */
-  function ConfirmModal({ message, onConfirm, onCancel }) {
+  function ConfirmModal({ message, onConfirm, onCancel, confirmLabel, confirmClass }) {
     return (
       <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9000}}>
         <div style={{background:"var(--panel)",borderRadius:"var(--radius-lg)",padding:"28px 32px",maxWidth:380,width:"90%",boxShadow:"var(--shadow)"}}>
           <div style={{marginBottom:20,lineHeight:1.6}}>{message}</div>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
             <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-            <button className="btn btn-danger" onClick={onConfirm}>Delete</button>
+            <button className={`btn ${confirmClass || "btn-danger"}`} onClick={onConfirm}>{confirmLabel || "Delete"}</button>
           </div>
         </div>
       </div>
@@ -1307,8 +1307,9 @@
       setSaving(false);
     }
 
+    const [clearTagsConfirm, setClearTagsConfirm] = React.useState(false);
     async function clearTags() {
-      if (!confirm("Clear manual tag override?")) return;
+      setClearTagsConfirm(false);
       try { await api(`/api/item/${encoded}/tags/clear`, { method: "POST" }); onToast("Tags cleared"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
@@ -1379,7 +1380,7 @@
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <a className="btn btn-primary btn-sm" href={item.file_url} target="_blank" rel="noreferrer">▶ Play</a>
-              <button className={`btn btn-sm ${watchLater ? "btn-secondary" : "btn-secondary"}`} onClick={toggleWatchLater}>
+              <button className={`btn btn-sm ${watchLater ? "btn-primary" : "btn-secondary"}`} onClick={toggleWatchLater}>
                 {watchLater ? "🕐 In Watch Later" : "🕐 Watch Later"}
               </button>
               <button className="btn btn-secondary btn-sm" onClick={markWatched}>✓ Watched</button>
@@ -1418,9 +1419,10 @@
             )}
             <div style={{fontSize:12,color:"var(--muted)",marginBottom:6}}>Manual Tags (comma-separated)</div>
             <textarea className="field" rows={3} value={tagInput} onChange={e => setTagInput(e.target.value)} style={{resize:"vertical"}} />
+            {clearTagsConfirm && <ConfirmModal message="Clear manual tag override?" onConfirm={clearTags} onCancel={() => setClearTagsConfirm(false)} confirmLabel="Clear" confirmClass="btn-secondary" />}
             <div style={{display:"flex",gap:8,marginTop:8}}>
               <button className="btn btn-primary btn-sm" onClick={saveTags} disabled={saving}>Save Tags</button>
-              <button className="btn btn-secondary btn-sm" onClick={clearTags}>Clear Override</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setClearTagsConfirm(true)}>Clear Override</button>
             </div>
             {/* Tag suggestion */}
             {permissions && permissions.includes("tags.manage") && (
@@ -1868,6 +1870,7 @@
     const [filters, setFilters] = useState({ tag: "", source: "", min: "", audio_language: "", scene_composition: "", performer_presentation: "", act_tag: "", duration_min: "", duration_max: "" });
     const [sources, setSources] = useState([]);
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
     const setF = (k, v) => setFilters(f => ({...f, [k]: v}));
 
@@ -1910,8 +1913,7 @@
     function clearSelect() { setSelected(new Set()); }
 
     async function bulkDelete() {
-      if (!selected.size) return;
-      if (!confirm(`Delete ${selected.size} item(s)?`)) return;
+      setBulkDeleteConfirm(false);
       try {
         await api("/api/delete-bulk", { method: "POST", body: JSON.stringify({ paths: [...selected] }) });
         onToast(`Deleted ${selected.size} item(s)`);
@@ -1933,6 +1935,7 @@
     return (
       <div style={{padding:24}}>
         {deleteTarget && <ConfirmModal message={`Move "${deleteTarget}" to trash?`} onConfirm={() => doDelete(deleteTarget)} onCancel={() => setDeleteTarget(null)} />}
+        {bulkDeleteConfirm && <ConfirmModal message={`Move ${selected.size} item(s) to trash?`} onConfirm={bulkDelete} onCancel={() => setBulkDeleteConfirm(false)} />}
 
         {/* AI Librarian slide-in */}
         {showLibrarian && <AILibrarian onOpen={onOpen} onClose={() => setShowLibrarian(false)} />}
@@ -2001,7 +2004,7 @@
         {selected.size > 0 && (
           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12,background:"var(--panel-2)",padding:"8px 12px",borderRadius:"var(--radius)"}}>
             <span style={{color:"var(--muted)",fontSize:13}}>{selected.size} selected</span>
-            <button className="btn btn-danger btn-sm" onClick={bulkDelete}>🗑 Delete selected</button>
+            <button className="btn btn-danger btn-sm" onClick={() => { if (selected.size) setBulkDeleteConfirm(true); }}>🗑 Delete selected</button>
             <button className="btn btn-secondary btn-sm" onClick={clearSelect}>Clear</button>
             <button className="btn btn-secondary btn-sm" onClick={selectAll}>Select all on page</button>
           </div>
@@ -2147,6 +2150,7 @@
     const [creating, setCreating] = useState(false);
     const [newName, setNewName] = useState("");
     const [newQuery, setNewQuery] = useState("");
+    const [deleteCollectionId, setDeleteCollectionId] = useState(null);
     async function load() {
       setLoading(true);
       try { const r = await api("/api/collections"); setCollections(r.collections || r || []); }
@@ -2162,12 +2166,13 @@
       } catch (e) { onToast(e.message, "error"); }
     }
     async function del(id) {
-      if (!confirm("Delete this collection?")) return;
+      setDeleteCollectionId(null);
       try { await api(`/api/collections/${id}`, { method: "DELETE" }); onToast("Deleted"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
     return (
       <div style={{padding:24}}>
+        {deleteCollectionId && <ConfirmModal message="Delete this collection?" onConfirm={() => del(deleteCollectionId)} onCancel={() => setDeleteCollectionId(null)} />}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontWeight:700,fontSize:18}}>📂 Collections</div>
           <button className="btn btn-primary btn-sm" onClick={() => setCreating(c => !c)}>+ New Collection</button>
@@ -2199,7 +2204,7 @@
               {c.query && <div style={{fontSize:12,color:"var(--muted)"}}>{c.query}</div>}
               {c.count != null && <div style={{fontSize:12,color:"var(--muted)"}}>{c.count} items</div>}
             </div>
-            <button className="btn btn-danger btn-sm" onClick={() => del(c.id)}>Delete</button>
+            <button className="btn btn-danger btn-sm" onClick={() => setDeleteCollectionId(c.id)}>Delete</button>
           </div>
         ))}
       </div>
@@ -2210,6 +2215,7 @@
   function TrashPage({ onToast }) {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
     async function load() {
       setLoading(true);
       try { const r = await api("/api/trash"); setItems(r.items || r || []); }
@@ -2222,15 +2228,16 @@
       catch (e) { onToast(e.message, "error"); }
     }
     async function emptyTrash() {
-      if (!confirm("Permanently delete all trashed items? This cannot be undone.")) return;
+      setEmptyTrashConfirm(false);
       try { await api("/api/trash/empty", { method: "POST" }); onToast("Trash emptied"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
     return (
       <div style={{padding:24}}>
+        {emptyTrashConfirm && <ConfirmModal message="Permanently delete all trashed items? This cannot be undone." onConfirm={emptyTrash} onCancel={() => setEmptyTrashConfirm(false)} />}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontWeight:700,fontSize:18}}>🗑 Trash</div>
-          {items.length > 0 && <button className="btn btn-danger btn-sm" onClick={emptyTrash}>Empty Trash</button>}
+          {items.length > 0 && <button className="btn btn-danger btn-sm" onClick={() => setEmptyTrashConfirm(true)}>Empty Trash</button>}
         </div>
         {loading && <div style={{color:"var(--muted)"}}>Loading…</div>}
         {!loading && items.length === 0 && (
@@ -2544,6 +2551,7 @@
     const [tab, setTab] = useState("suggestions");
     const [savingMappings, setSavingMappings] = useState(false);
     const [migrating, setMigrating] = useState(false);
+    const [migrateConfirm, setMigrateConfirm] = useState(false);
 
     async function loadSuggestions() {
       try { const r = await api("/api/tags/suggestions"); setSuggestions(r.suggestions || r || []); }
@@ -2575,7 +2583,7 @@
       setSavingMappings(false);
     }
     async function runMigration() {
-      if (!confirm("Bulk-assign ai_inferred label_source to all legacy tag assignments?")) return;
+      setMigrateConfirm(false);
       setMigrating(true);
       try {
         await api("/api/tags/migrate", { method: "POST", body: JSON.stringify({ label_source: "ai_inferred" }) });
@@ -2586,6 +2594,7 @@
 
     return (
       <div style={{padding:24}}>
+        {migrateConfirm && <ConfirmModal message="Bulk-assign ai_inferred label_source to all legacy tag assignments?" onConfirm={runMigration} onCancel={() => setMigrateConfirm(false)} confirmLabel="Run Migration" confirmClass="btn-warning" />}
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🏷 Tag Management</div>
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           {["suggestions","mappings","migration"].map(t => (
@@ -2627,7 +2636,7 @@
             <div style={{marginBottom:12,color:"var(--muted)",fontSize:13}}>
               Bulk-assign <code>label_source</code> to legacy video tags that predate v4.5.0. This is a one-time convenience tool — it does not affect normal app operation.
             </div>
-            <button className="btn btn-warning btn-sm" onClick={runMigration} disabled={migrating}>
+            <button className="btn btn-warning btn-sm" onClick={() => setMigrateConfirm(true)} disabled={migrating}>
               {migrating ? "Running…" : "Mark all legacy tags as ai_inferred"}
             </button>
           </div>
@@ -2640,6 +2649,7 @@
   function AdminScoring({ onToast }) {
     const [scoring, setScoring] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [resetConfirm, setResetConfirm] = useState(false);
     async function load() {
       try { const r = await api("/api/admin/scoring"); setScoring(r); }
       catch (e) { onToast(e.message, "error"); }
@@ -2652,7 +2662,7 @@
       setSaving(false);
     }
     async function reset() {
-      if (!confirm("Reset scoring to defaults?")) return;
+      setResetConfirm(false);
       try { await api("/api/admin/scoring/reset", { method: "POST" }); onToast("Reset to defaults"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
@@ -2660,6 +2670,7 @@
     const setS = (k, v) => setScoring(s => ({...s, [k]: v}));
     return (
       <div style={{padding:24}}>
+        {resetConfirm && <ConfirmModal message="Reset scoring to defaults?" onConfirm={reset} onCancel={() => setResetConfirm(false)} confirmLabel="Reset" confirmClass="btn-warning" />}
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🎯 Scoring</div>
         <div style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:16,marginBottom:16}}>
           {Object.entries(scoring).filter(([k]) => !k.startsWith("_")).map(([k, v]) => (
@@ -2683,6 +2694,7 @@
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [form, setForm] = useState({ username: "", password: "", role: "viewer" });
+    const [deleteUserId, setDeleteUserId] = useState(null);
     const setF = (k, v) => setForm(f => ({...f, [k]: v}));
     async function load() {
       setLoading(true);
@@ -2702,12 +2714,13 @@
       catch (e) { onToast(e.message, "error"); }
     }
     async function del(id) {
-      if (!confirm("Delete this user?")) return;
+      setDeleteUserId(null);
       try { await api(`/api/auth/users/${id}`, { method: "DELETE" }); onToast("Deleted"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
     return (
       <div style={{padding:24}}>
+        {deleteUserId && <ConfirmModal message="Delete this user?" onConfirm={() => del(deleteUserId)} onCancel={() => setDeleteUserId(null)} />}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontWeight:700,fontSize:18}}>👥 Users & Groups</div>
           <button className="btn btn-primary btn-sm" onClick={() => setCreating(c => !c)}>+ Add User</button>
@@ -2740,7 +2753,7 @@
               <div style={{fontSize:12,color:"var(--muted)"}}>{u.role || u.group} {u.active === false ? "· disabled" : ""}</div>
             </div>
             {u.active !== false && <button className="btn btn-secondary btn-sm" onClick={() => disable(u.id || u.username)}>Disable</button>}
-            <button className="btn btn-danger btn-sm" onClick={() => del(u.id || u.username)}>Delete</button>
+            <button className="btn btn-danger btn-sm" onClick={() => setDeleteUserId(u.id || u.username)}>Delete</button>
           </div>
         ))}
       </div>

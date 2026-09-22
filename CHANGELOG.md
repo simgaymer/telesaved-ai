@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.5.7 — Ship-blocker Security + UX Fixes
+
+- **Session cookie `secure=True`** — `make_auth_response()` now sets `secure=True` on the auth session cookie. Previously `secure=False` meant the cookie was transmitted in plaintext on the inner hop of a TLS-terminating reverse proxy. Closes the LAN session-hijacking risk.
+- **Login rate limiting** — `POST /api/auth/login` now enforces a sliding-window lockout: ≥10 failed attempts within a 5-minute window returns `429 Too Many Requests` with a clear error message. Counters reset on successful login. In-memory only (resets on restart) — sufficient for the self-hosted single-process deployment model.
+- **Privacy token URL leak closed** — `privacy_token_from_request()` no longer accepts the token via URL query string. Query-string tokens leak through server logs, browser history, and Referer headers. Header (`X-Telesaved-Privacy-Token`) and cookie (`telesaved_privacy_token`) branches retained.
+- **Watch Later button state fixed** — The "🕐 Watch Later" button in `ItemDetailPage` now correctly uses `btn-primary` when the item is in Watch Later and `btn-secondary` when it isn't. Previously both branches evaluated to `btn-secondary`, giving no visual feedback on queue state.
+- **`window.confirm()` replaced with `ConfirmModal` in all 7 locations** — `ConfirmModal` gains optional `confirmLabel` and `confirmClass` props for non-delete confirmations. Replaced: Clear Override (Tags tab), Bulk delete (LibraryPage), Delete collection (CollectionsPage), Empty Trash (TrashPage), Tag migration (AdminTagManagement), Reset scoring (AdminScoring), Delete user (AdminUsers).
+- Smoke test package and install references updated to `4.5.7`.
+- `APP_VERSION` → `4.5.7`; sidebar badge, README, ROADMAP updated.
+
 ## 4.5.6 — Tier 1 Modular Refactor: Serializers extracted
 
 - **`ARCHITECTURE.md` created** — Formal architecture spine documenting the layered-monolith → modular-monolith transition paradigm, 7 architectural decisions (AD-1 through AD-7), module dependency diagram, consistency conventions, current and target directory layout, Tier 1 extraction order, and deferred decisions. This is the build contract for all future module work.

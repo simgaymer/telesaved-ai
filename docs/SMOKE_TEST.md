@@ -4,7 +4,7 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 
 ## Environment
 
-- **Package:** `dist/telesaved-ai_4.5.4_all.deb`
+- **Package:** `dist/telesaved-ai_4.5.7_all.deb`
 - **Tester:**
 - **Date:**
 - **Host OS:**
@@ -16,7 +16,7 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 
 | # | Check | Expected | Result |
 |---|-------|----------|--------|
-| 1.1 | `sudo apt install ./telesaved-ai_4.5.1_all.deb` completes | Exit 0, no errors | |
+| 1.1 | `sudo apt install ./telesaved-ai_4.5.7_all.deb` completes | Exit 0, no errors | |
 | 1.2 | `id telesaved` | User exists, no login shell | |
 | 1.3 | `systemctl is-active telesaved` | `active` | |
 | 1.4 | `systemctl show telesaved -p User` | `User=telesaved` | |

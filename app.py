@@ -100,7 +100,7 @@ JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
 PER_PAGE = 24
-APP_VERSION = "4.5.6"
+APP_VERSION = "4.5.7"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -722,6 +722,30 @@ def get_display_tags_for_signals(ai_signals):
 # ================= LOCAL USERS / RBAC / SOURCE ACL =================
 AUTH_SESSION_COOKIE = "telesaved_auth_token"
 AUTH_SESSIONS = {}
+# Login rate limiting: track failed attempts per normalised username.
+# After _LOGIN_MAX_ATTEMPTS failures within _LOGIN_WINDOW_SECONDS the account
+# is temporarily locked until the window expires (no persistent storage needed).
+_LOGIN_ATTEMPTS: dict = {}   # username -> {"count": int, "window_start": float}
+_LOGIN_MAX_ATTEMPTS = 10
+_LOGIN_WINDOW_SECONDS = 300  # 5-minute sliding window
+
+def _login_check_and_record_failure(username: str) -> bool:
+    """Return True if the account is locked (too many recent failures).
+    Record a new failure unconditionally (call after a failed attempt).
+    """
+    now = time.time()
+    entry = _LOGIN_ATTEMPTS.get(username)
+    if entry and (now - entry["window_start"]) >= _LOGIN_WINDOW_SECONDS:
+        entry = None  # window expired — reset
+    if entry is None:
+        _LOGIN_ATTEMPTS[username] = {"count": 1, "window_start": now}
+        return False
+    entry["count"] += 1
+    return entry["count"] > _LOGIN_MAX_ATTEMPTS
+
+def _login_clear_failures(username: str) -> None:
+    """Clear failure record on successful login."""
+    _LOGIN_ATTEMPTS.pop(username, None)
 AUTH_SESSION_SECONDS = 60 * 60 * 12
 PERMISSION_CATALOG = [
     {"id": "*", "label": "Full system access"},
@@ -980,7 +1004,7 @@ def make_auth_response(payload, token=None, max_age=None, clear=False):
             max_age=max_age or AUTH_SESSION_SECONDS,
             httponly=True,
             samesite="Lax",
-            secure=False,
+            secure=True,
             path="/",
         )
     return response
@@ -1594,9 +1618,10 @@ def create_privacy_session():
     PRIVACY_SESSION_TOKENS[token] = datetime.now().timestamp() + privacy_expiry_seconds()
     return token
 def privacy_token_from_request(request):
+    # NOTE: query-string branch intentionally removed — tokens in URLs leak via
+    # server logs, browser history, and Referer headers. Header + cookie only.
     return (
-        request.headers.get("X-Telesaved-Privacy-Token") or request.cookies.get("telesaved_privacy_token")
-        or request.query.get("privacy_token") or ""
+        request.headers.get("X-Telesaved-Privacy-Token") or request.cookies.get("telesaved_privacy_token") or ""
     )
 def is_privacy_unlocked(request):
     if not privacy_is_enabled():
@@ -8499,9 +8524,16 @@ async def api_auth_login(request):
         data = {}
     username = normalize_username(data.get("username"))
     password = str(data.get("password") or "")
+    # Check rate limit before touching any credentials
+    if username:
+        entry = _LOGIN_ATTEMPTS.get(username, {})
+        if entry.get("count", 0) >= _LOGIN_MAX_ATTEMPTS and (time.time() - entry.get("window_start", 0)) < _LOGIN_WINDOW_SECONDS:
+            logger.warning("TeleSaved login rate-limited for username=%s", username)
+            return web.json_response({"ok": False, "error": "Too many login attempts. Please try again later."}, status=429)
     user = (auth_data.get("users") or {}).get(username)
     local_allowed = bool((auth_data.get("settings") or {}).get("allow_local_login", True))
     if local_allowed and user and not user.get("disabled") and user.get("auth_backend", "local") == "local" and verify_password(password, user):
+        _login_clear_failures(username)
         user["last_login"] = now_stamp()
         save_auth_data()
         token, max_age = create_auth_session(username)
@@ -8512,6 +8544,7 @@ async def api_auth_login(request):
             ldap_result = ldap_authenticate(username, password)
             ldap_user = (auth_data.get("users") or {}).get(username)
             if ldap_user and not ldap_user.get("disabled"):
+                _login_clear_failures(username)
                 ldap_user["last_login"] = now_stamp()
                 save_auth_data()
                 token, max_age = create_auth_session(username)
@@ -8521,6 +8554,9 @@ async def api_auth_login(request):
                 max_age=max_age)
         except Exception as e:
             logger.warning("TeleSaved LDAP login failed for username=%s: %s", username, e)
+    # Record failure (also handles first-failure init via the helper)
+    if username:
+        _login_check_and_record_failure(username)
     logger.warning("Failed TeleSaved login for username=%s", username)
     return web.json_response({"ok": False, "error": "Invalid username or password"}, status=401)
 @routes.post("/api/auth/logout")
