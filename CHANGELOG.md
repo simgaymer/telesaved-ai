@@ -1,5 +1,47 @@
 # Changelog
 
+## 4.5.15 — Tier 2 Modular Refactor: Tier 2 COMPLETE (auth.py, jobs.py, sources.py)
+
+- **`telesaved/auth.py` extracted** (v4.5.13) — LOCAL USERS / RBAC / SESSION / LDAP section (~323 lines, 22 functions) moved from `app.py` into `telesaved/auth.py`. `_bind(cfg)` at startup; forwarding aliases in `app.py`. All existing auth call sites unchanged.
+- **`telesaved/jobs.py` extracted** (v4.5.14) — JOB / QUEUE CONTROL section (~264 lines, 16 functions + 5 globals) moved to `telesaved/jobs.py`. `jobs`, `job_lock`, `queued_job_ids`, `job_engine_state` aliased in `app.py`. Async job primitives (`wait_job_if_paused`, `run_tracked_blocking_job`, `job_worker_loop`) moved correctly. Task dispatch callables (defined after `_bind`) passed as lambdas.
+- **`telesaved/sources.py` extracted** (v4.5.15) — VIDEO SOURCE HELPERS + DOWNLOAD / INGEST (~678 lines, 25 functions + `sem`) moved to `telesaved/sources.py`. Uses `_bind(cfg)` + `_bind_client(client)` pattern — `client` injected via a second call after `TelegramClient` is created in MAIN. `process_message` returns `(faiss_index, faiss_keys)`; forwarding alias updates app-scope globals. `apply_auto_rules_to_path` passed as lambda (defined after `_bind`). No Telethon import in `sources.py` — uses injected `utils` and `client`.
+- **Tier 2 extraction complete** — All 8 planned modules extracted. `app.py` reduced from ~10,104 lines (pre-Tier 2) to ~8,385 lines.
+- `APP_VERSION` → `4.5.15`; README, ROADMAP, ARCHITECTURE, sidebar badge updated.
+
+## 4.5.12 — Tier 2 Modular Refactor: pipeline.py extracted
+
+- **`telesaved/pipeline.py` extracted** — All 23 AI/ML pipeline functions and the model-setup block (CLIP, YOLO, NudeNet, frame extraction, preview generation, scene/timeline detection, embedding, tagging, FAISS, search) moved from `app.py` (lines 2743–3514, 772 lines) into a new purpose-built module. `app.py` calls `_pipeline._bind(cfg)` at startup and holds 1-line forwarding aliases; all downstream call sites are unchanged (AD-4, AD-5 compliance). ML imports (`torch`, `clip`, `PIL.Image`, `ultralytics.YOLO`, `numpy`, `faiss`) removed from `app.py`.
+- **`reprocess_file()` return-value change (internal)** — The pipeline version now returns `(faiss_index, faiss_keys)` so the caller can update its own app-scope globals. The forwarding alias in `app.py` handles this transparently; no external callsite is aware of the change.
+- **`reprocess_all_files_job()` and `reprocess_selected_files_job()` kept in `app.py`** — Both are `async` and use job primitives; per AD-5 pipeline.py is sync-only. They call `_pipeline.reprocess_file()` via the forwarding alias.
+- **ARCHITECTURE.md updated** — `pipeline.py` marked ADOPTED; stale entries corrected (FAISS disk persistence note, `app.py` line count, AD-4 status).
+- `APP_VERSION` → `4.5.12`; README, ROADMAP, sidebar badge updated.
+
+## 4.5.11 — Admin audit log
+
+- **Admin audit log** — New `audit_log` SQLite table (created by `CREATE TABLE IF NOT EXISTS` — no version bump). `telesaved/state.py` exposes `append_audit_log(actor, action, detail)` (best-effort, warning-only on failure) and `get_audit_log(limit)`. 15 admin routes instrumented: user create/update/delete, group create/update/delete, source ACL update, system settings, scoring update/reset, library reprocess, tag create/delete, backup create/restore.
+- **`GET /api/admin/audit-log`** — New endpoint, requires `system.admin`. Returns entries newest-first; supports `?limit=` (1–1000).
+- **Audit Log tab in Admin → Logs** — Third tab added to `AdminLogs` component alongside "System Logs" and "Feedback". Renders a table with When / Actor / Action / Detail columns. Lazy-loads on first click; Refresh button re-fetches.
+- `APP_VERSION` → `4.5.11`; README, ROADMAP, sidebar badge updated.
+
+## 4.5.10 — Tier 2 Modular Refactor: state.py extracted
+
+- **`telesaved/state.py` extracted** — The entire `# SQLITE STATE BACKEND` section (419 lines) moved into a purpose-built module. Owns the six shared in-memory globals (`tags`, `scores_store`, `embeddings_store`, `metadata_store`, `state_ids`, `state_hashes`) and all SQLite I/O. `app.py` calls `_state._bind(cfg)` at startup and holds 1-line forwarding aliases; all ~390 downstream call sites are unchanged (AD-1, AD-3 compliance).
+- **AD-3 route-handler cleanup** — Six raw `sqlite_connect()` calls in tag-suggestion route handlers replaced with typed helpers in `state.py`: `suggest_tag()`, `list_suggestions()`, `get_suggestion()`, `set_suggestion_status()`, `export_tag_labels()`.
+- **Backup restore uses `_state._rebind()`** — The 12-line manual `.clear()/.update()` block in `restore_from_backup()` replaced with a single `_state._rebind(restored_state)` call (AD-1: state mutation goes through `state.py` only).
+- **`ARCHITECTURE.md` updated** — Tier 1 marked COMPLETE; Tier 2 extraction order added with `state.py` marked ADOPTED; Tier 2 next steps (`pipeline.py`, `auth.py`, `jobs.py`, `sources.py`) listed.
+- `APP_VERSION` → `4.5.10`; README, ROADMAP updated.
+
+## 4.5.9 — FAISS disk persistence + reliability fixes
+
+- **FAISS disk persistence** — The semantic-search index is now checkpointed to disk (`faiss_index.bin` + `faiss_keys.json` in `base_path`) immediately after every successful rebuild. On startup the index is loaded from these sidecar files instead of being rebuilt from scratch, eliminating the O(n) startup cost at large library sizes. The cache is validated on load (key count, vector count, and membership against `embeddings_store`); any mismatch falls back to a clean rebuild. The sidecar is invalidated before backup restore so a post-restore restart always reflects the restored data.
+- **Restore pipeline FAISS cache invalidation** — `restore_from_backup()` now calls `_invalidate_faiss_cache()` before rebuilding the index, preventing a pre-restore sidecar from being loaded on the next startup.
+- **`normalize_permission_list()` no longer adds a `library.view` fallback** — Returns an empty list for empty/invalid input. Callers that need a minimum grant must add it explicitly. Preserves a correct "no access" state for future SSO/OIDC zero-permission group sync.
+- **Session eviction cap on `create_auth_session()`** — Cleanup now runs only when `AUTH_SESSIONS` exceeds 1,000 entries, preventing a full dict walk on every login under normal load.
+- **Privacy session eviction cap on `create_privacy_session()`** — Same pattern: cleanup triggered only above 500 tokens.
+- **`delete_all_exact_duplicates()` job-lock wrap** — Holds `job_lock` across the full plan→execute cycle so a concurrent sync job cannot move files between the duplicate scan and the delete.
+- **`setup_status_payload()` and `/api/health` evaluate config live** — `TELEGRAM_CONFIGURED` is frozen at module import time and returned stale `True` after the wizard completed config without a restart. Both now evaluate `api_id and api_hash and not CONFIG_MISSING` inline.
+- `APP_VERSION` → `4.5.9`; README, ROADMAP updated.
+
 ## 4.5.8 — Tier 2 Modular Refactor + Backlog Sweep
 
 - **`telesaved/audio.py` wired** — `_audio._bind()` added at startup; all 26 functions in the AUDIO INTELLIGENCE HELPERS section replaced with 1-line forwarding aliases. `app.py` shrinks from 11,232 → 10,370 lines (−862 lines of implementation). `_audio._bind()` correctly placed after SERIALIZERS so `serialize_item` is defined before it is passed as a dependency.

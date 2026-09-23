@@ -896,7 +896,7 @@
       <div className="sidebar">
         <div className="brand">
           <div className="brand-badge">T</div>
-          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.8</div></div>
+          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.15</div></div>
         </div>
 
         <div className="nav-section">
@@ -929,7 +929,7 @@
         <div className="user-block">
           {currentUser && <div className="user-name">Signed in as <strong>{currentUser}</strong></div>}
           <a className="nav-item" href="https://github.com/simgaymer/telesaved-ai/blob/agent/restore-telesaved-source/CHANGELOG.md" target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--muted)"}}>
-            <span className="ni">📋</span>What's new in v4.5.8
+            <span className="ni">📋</span>What's new in v4.5.15
           </a>
           <button className="nav-item" style={{color:"var(--danger)"}} onClick={onLogout}>
             <span className="ni">🚪</span>Sign Out
@@ -2834,6 +2834,7 @@
   function AdminLogs({ onToast }) {
     const [logs, setLogs] = useState("");
     const [feedback, setFeedback] = useState([]);
+    const [auditEntries, setAuditEntries] = useState(null);
     const [tab, setTab] = useState("logs");
     async function loadLogs() {
       try { const r = await api("/api/admin/logs"); setLogs(typeof r === "string" ? r : JSON.stringify(r, null, 2)); }
@@ -2843,13 +2844,19 @@
       try { const r = await api("/api/admin/feedback"); setFeedback(r.feedback || r || []); }
       catch (e) { onToast(e.message, "error"); }
     }
+    async function loadAuditLog() {
+      try { const r = await api("/api/admin/audit-log?limit=500"); setAuditEntries(r.entries || []); }
+      catch (e) { onToast(e.message, "error"); setAuditEntries([]); }
+    }
     useEffect(() => { loadLogs(); loadFeedback(); }, []);
+    useEffect(() => { if (tab === "audit" && auditEntries === null) loadAuditLog(); }, [tab]);
     return (
       <div style={{padding:24}}>
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>📋 Logs</div>
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           <button className={`btn btn-sm ${tab==="logs"?"btn-primary":"btn-secondary"}`} onClick={() => setTab("logs")}>System Logs</button>
           <button className={`btn btn-sm ${tab==="feedback"?"btn-primary":"btn-secondary"}`} onClick={() => setTab("feedback")}>Feedback</button>
+          <button className={`btn btn-sm ${tab==="audit"?"btn-primary":"btn-secondary"}`} onClick={() => setTab("audit")}>Audit Log</button>
         </div>
         {tab === "logs" && (
           <div>
@@ -2865,6 +2872,38 @@
               <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>{f.created_at || ""}</div>
             </div>
           ))
+        )}
+        {tab === "audit" && (
+          <div>
+            <button className="btn btn-secondary btn-sm" style={{marginBottom:12}} onClick={loadAuditLog}>↻ Refresh</button>
+            {auditEntries === null
+              ? <div style={{color:"var(--muted)"}}>Loading…</div>
+              : auditEntries.length === 0
+                ? <div style={{color:"var(--muted)"}}>No audit events yet.</div>
+                : (
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead>
+                      <tr style={{borderBottom:"1px solid var(--border)",color:"var(--muted)",textAlign:"left"}}>
+                        <th style={{padding:"4px 10px 4px 0",whiteSpace:"nowrap"}}>When</th>
+                        <th style={{padding:"4px 10px 4px 0"}}>Actor</th>
+                        <th style={{padding:"4px 10px 4px 0"}}>Action</th>
+                        <th style={{padding:"4px 0"}}>Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditEntries.map(e => (
+                        <tr key={e.id} style={{borderBottom:"1px solid var(--border)"}}>
+                          <td style={{padding:"5px 10px 5px 0",whiteSpace:"nowrap",color:"var(--muted)"}}>{e.created_at}</td>
+                          <td style={{padding:"5px 10px 5px 0",fontWeight:500}}>{e.actor}</td>
+                          <td style={{padding:"5px 10px 5px 0"}}><code style={{fontSize:11,background:"var(--panel-2)",padding:"1px 5px",borderRadius:3}}>{e.action}</code></td>
+                          <td style={{padding:"5px 0",color:"var(--fg)"}}>{e.detail}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+            }
+          </div>
         )}
       </div>
     );
@@ -2968,7 +3007,7 @@
         const auth = await api("/api/auth/status");
         if (!auth || auth.bootstrap_required) { setBootstrapRequired(true); setAppState("login"); return; }
         if (!auth.authenticated) { setBootstrapRequired(false); setAppState("login"); return; }
-        setCurrentUser(auth.user || auth.username || "user");
+        setCurrentUser((auth.user && (auth.user.display_name || auth.user.username || auth.user.id)) || auth.username || "user");
         setPermissions(auth.permissions || []);
         setAuthError("");
         setAppState("ready");
@@ -3094,3 +3133,4 @@
 </script>
 </body>
 </html>
+

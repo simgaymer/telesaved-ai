@@ -154,7 +154,7 @@ graph TD
 | CLIP | openai/CLIP @ git HEAD |
 | Ultralytics (YOLOv8) | ≥ 8.0 |
 | NudeNet | ≥ 3.4 |
-| FAISS | faiss-cpu ≥ 1.8 (in-memory, no disk persistence yet) |
+| FAISS | faiss-cpu ≥ 1.8 (disk-persisted sidecar since v4.5.9) |
 | Whisper | openai-whisper ≥ 20231117 (invoked as subprocess CLI) |
 | ldap3 | ≥ 2.9 (optional, graceful fallback) |
 | React | 18.3.1 (CDN, SRI-pinned) |
@@ -165,11 +165,12 @@ graph TD
 Current (single file):
 ```text
 telesaved-ai/
-  app.py                  # 11,500-line monolith — all sections
+  app.py                  # 9,465-line monolith — all sections
   frontend/
     index.html            # React SPA (Babel in-browser transpile)
   requirements.txt
   ARCHITECTURE.md         # this document
+  docs/SCALING.md         # resource requirements, O(n) hotspots, hardware sizing
   docs/
   systemd/
   scripts/
@@ -216,32 +217,43 @@ The transition is **additive and non-breaking**: each extraction moves a section
 into its module, `app.py` gains an import, and the running application is unchanged. Modules
 are extracted in dependency order — leaves first, roots last.
 
-## Extraction Order (Tier 1 — immediate, low risk)
+## Extraction Order (Tier 1 — immediate, low risk) [COMPLETE]
 
-These three sections have the cleanest boundaries and move first:
+1. **`telesaved/serializers.py`** [ADOPTED] — Pure functions, no global writes, no I/O.
+2. **`telesaved/ldap_backend.py`** [ADOPTED] — Reads `auth_data` (passed as argument). 519 lines removed.
+3. **`telesaved/audio.py`** [ADOPTED] — Whisper subprocess + audio analysis helpers. 952 lines removed.
 
-1. **`telesaved/serializers.py`** — Pure functions, no global writes, no I/O. Depends only on
-   domain helper functions already in `app.py` (called by reference). Zero regression risk.
+Total after Tier 1: `app.py` shrank from ~11,500 to ~10,400 lines.
 
-2. **`telesaved/ldap_backend.py`** — Reads `auth_data` (passed as argument) and optional
-   `ldap3` import. No state writes. 519 lines removed from `app.py`.
+## Extraction Order (Tier 2 — state keystone) [COMPLETE]
 
-3. **`telesaved/audio.py`** — Reads and writes `metadata_store` (passed as argument to key
-   functions). The Whisper subprocess call is self-contained. 952 lines removed from `app.py`.
+4. **`telesaved/state.py`** [ADOPTED] — SQLite state backend + six in-memory globals
+   (`tags`, `scores_store`, `embeddings_store`, `metadata_store`, `state_ids`,
+   `state_hashes`), `save_state()`, all typed column mutators and tag-suggestion helpers.
+   ~390 lines removed from `app.py`. Also eliminated 6 raw `sqlite_connect()` calls
+   from route handlers (AD-3 compliance). `app.py` holds 1-line forwarding aliases.
 
-Total after Tier 1: `app.py` shrinks from ~11,500 to ~9,000 lines.
+5. **`telesaved/pipeline.py`** [ADOPTED] — ML model singletons, frame extraction, tagging,
+   FAISS build/persist/load/invalidate, search. 772 lines removed from `app.py`.
+   ML imports (`torch`, `clip`, `PIL`, `YOLO`, `numpy`, `faiss`) removed from `app.py`.
+
+6. **`telesaved/auth.py`** [ADOPTED] — LOCAL USERS / RBAC / SESSION / LDAP section.
+   323 lines removed from `app.py`. `_bind(cfg)` + forwarding alias pattern.
+
+7. **`telesaved/jobs.py`** [ADOPTED] — JOB / QUEUE CONTROL section.
+   264 lines removed from `app.py`. `_bind(cfg)` + forwarding alias pattern.
+
+8. **`telesaved/sources.py`** [ADOPTED] — VIDEO SOURCE HELPERS + DOWNLOAD / INGEST.
+   678 lines removed from `app.py`. `_bind(cfg)` + `_bind_client(client)` pattern.
+   `client` injected late via `_bind_client()` because TelegramClient is created after `_bind()` runs.
 
 ## Deferred
 
-- **`telesaved/state.py` / StateStore class** — The highest-leverage refactor. Requires
-  touching every call site of `metadata_store`, `tags`, `scores_store`, etc. Needs its own
-  design session before implementation. Prerequisite for Postgres migration path.
-- **`telesaved/pipeline.py`** — ML model singletons. Straightforward extraction but blocked
-  on `state.py` being clean first (pipeline writes to `metadata_store`).
 - **`telesaved/routes/`** — Route handler split. Low complexity gain until domain helpers
   are fully extracted; deferred to Tier 3.
-- **FAISS disk persistence** — Checkpoint on shutdown, read on startup. Lives in
-  `telesaved/faiss_index.py` once extracted. Roadmap item P2 #1.
-- **Async job worker + write queue** — Proper async SQLite writes via a queue. Roadmap P2 #8.
+- **FAISS disk persistence** — [SHIPPED in v4.5.9] `_persist_faiss_index` / `_load_faiss_index`
+  written to `BASE_PATH/faiss_index.bin` + `faiss_keys.json`.
+- **Async job worker + write queue** — Proper async SQLite writes via a queue. Prerequisite
+  for Postgres migration. Roadmap item.
 - **Frontend build step** — Replace CDN Babel with a real build (Vite/esbuild). Removes
-  `unsafe-eval` requirement and enables true CSP. Roadmap P2 #3.
+  `unsafe-eval` requirement and enables true CSP.

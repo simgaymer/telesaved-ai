@@ -31,12 +31,10 @@ except Exception as e:
     LDAP3_IMPORT_ERROR = str(e)
     def ldap_escape_filter_chars(value):
         return str(value or "")
-import torch
-import clip
-from PIL import Image
-from ultralytics import YOLO
-import numpy as np
-import faiss
+import telesaved.auth as _auth
+import telesaved.jobs as _jobs
+import telesaved.pipeline as _pipeline
+import telesaved.sources as _sources
 # ================= CONFIG =================
 APP_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
@@ -99,8 +97,10 @@ WHISPER_LOG_FILE = os.path.join(BASE_PATH, "whisper.log")
 JOB_FILE = os.path.join(BASE_PATH, "jobs.json")
 AUTH_FILE = os.path.join(BASE_PATH, "auth.json")
 TELEGRAM_METADATA_PATH = os.path.join(BASE_PATH, "telegram_metadata")
+FAISS_INDEX_FILE = os.path.join(BASE_PATH, "faiss_index.bin")
+FAISS_KEYS_FILE = os.path.join(BASE_PATH, "faiss_keys.json")
 PER_PAGE = 24
-APP_VERSION = "4.5.8"
+APP_VERSION = "4.5.15"
 os.makedirs(BASE_PATH, exist_ok=True)
 os.makedirs(FRAME_PATH, exist_ok=True)
 os.makedirs(PREVIEW_PATH, exist_ok=True)
@@ -724,323 +724,56 @@ def get_display_tags_for_signals(ai_signals):
                 result.append(label)
     return result
 
-# ================= LOCAL USERS / RBAC / SOURCE ACL =================
-AUTH_SESSION_COOKIE = "telesaved_auth_token"
-AUTH_SESSIONS = {}
-# Login rate limiting: track failed attempts per normalised username.
-# After _LOGIN_MAX_ATTEMPTS failures within _LOGIN_WINDOW_SECONDS the account
-# is temporarily locked until the window expires (no persistent storage needed).
-_LOGIN_ATTEMPTS: dict = {}   # username -> {"count": int, "window_start": float}
-_LOGIN_MAX_ATTEMPTS = 10
-_LOGIN_WINDOW_SECONDS = 300  # 5-minute sliding window
-
-def _login_check_and_record_failure(username: str) -> bool:
-    """Return True if the account is locked (too many recent failures).
-    Record a new failure unconditionally (call after a failed attempt).
-    """
-    now = time.time()
-    entry = _LOGIN_ATTEMPTS.get(username)
-    if entry and (now - entry["window_start"]) >= _LOGIN_WINDOW_SECONDS:
-        entry = None  # window expired — reset
-    if entry is None:
-        _LOGIN_ATTEMPTS[username] = {"count": 1, "window_start": now}
-        return False
-    entry["count"] += 1
-    return entry["count"] > _LOGIN_MAX_ATTEMPTS
-
-def _login_clear_failures(username: str) -> None:
-    """Clear failure record on successful login."""
-    _LOGIN_ATTEMPTS.pop(username, None)
-AUTH_SESSION_SECONDS = 60 * 60 * 12
-PERMISSION_CATALOG = [
-    {"id": "*", "label": "Full system access"},
-    {"id": "admin.view", "label": "Open Administration"},
-    {"id": "library.view", "label": "View library"},
-    {"id": "downloads.view", "label": "View downloads"},
-    {"id": "content.manage", "label": "Add, rename, reprocess, and manage content"},
-    {"id": "content.delete", "label": "Move content to Trash / restore content"},
-    {"id": "tags.manage", "label": "Assign, disassign, create, and remove tags"},
-    {"id": "sources.manage", "label": "Manage Telegram sources and source pipelines"},
-    {"id": "source_acl.manage", "label": "Grant and revoke source access"},
-    {"id": "jobs.manage", "label": "View and control jobs"},
-    {"id": "security.manage", "label": "Manage users, groups, permissions, and local authentication"},
-    {"id": "system.admin", "label": "Manage system settings, setup, logs, backups, import/export"},
-]
-DEFAULT_GROUPS = {
-    "Admin": {
-        "name": "Admin",
-        "description": "Full Systems Access",
-        "system": True,
-        "permissions": ["*"],
-    },
-    "Manager": {
-        "name": "Manager",
-        "description": "Add/delete content, manage sources, assign/disassign tags, and grant source access",
-        "system": True,
-        "permissions": [
-            "admin.view", "library.view", "downloads.view", "content.manage", "content.delete",
-            "tags.manage", "sources.manage", "source_acl.manage", "jobs.manage"
-        ],
-    },
-    "Users": {
-        "name": "Users",
-        "description": "View Only Access, No Access to Administration",
-        "system": True,
-        "permissions": ["library.view", "downloads.view"],
-    },
-}
-def ldap_default_settings():
-    return {
-        "enabled": False,
-        "server_uri": "ldap://localhost:389",
-        "start_tls": False,
-        "bind_dn": "",
-        "bind_password": "",
-        "user_search_base": "",
-        "user_filter": "(uid={username})",
-        "username_attribute": "uid",
-        "display_name_attribute": "cn",
-        "email_attribute": "mail",
-        "memberof_attribute": "memberOf",
-        "group_search_base": "",
-        "group_filter": "(|(member={user_dn})(uniqueMember={user_dn})(memberUid={username}))",
-        "group_name_attribute": "cn",
-        "default_groups": ["Users"],
-        "group_mappings": {},
-        "auto_create_users": True,
-        "sync_groups_on_login": True,
-        "timeout_seconds": 8,
-    }
-def identity_default_data():
-    return {
-        "local": {"enabled": True, "emergency_admin": True},
-        "ldap": ldap_default_settings(),
-        "oidc": {"enabled": False},
-    }
-def ensure_identity_defaults(data):
-    identity = data.setdefault("identity", {})
-    identity.setdefault("local", {"enabled": True, "emergency_admin": True})
-    ldap_settings = identity.setdefault("ldap", {})
-    defaults = ldap_default_settings()
-    for key, value in defaults.items():
-        ldap_settings.setdefault(key, json.loads(json.dumps(value)))
-    identity.setdefault("oidc", {"enabled": False})
-    return data
-def auth_default_data():
-    return {
-        "version": 1,
-        "enabled": True,
-        "created_at": now_stamp() if "now_stamp" in globals() else datetime.now().isoformat(timespec="seconds"),
-        "users": {},
-        "groups": json.loads(json.dumps(DEFAULT_GROUPS)),
-        "source_access": {
-            "users": {},
-            "groups": {
-                "Admin": ["*"],
-                "Manager": ["*"],
-                "Users": [],
-            },
-        },
-        "settings": {
-            "session_timeout_minutes": 720,
-            "allow_local_login": True,
-        },
-        "identity": identity_default_data(),
-    }
-def normalize_group_name(value):
-    name = re.sub(r"\s+", " ", str(value or "").strip())
-    name = "".join(ch for ch in name if ord(ch) >= 32 and ch not in "<>:\\/*?\"'").strip()
-    return name[:64]
-def normalize_username(value):
-    username = str(value or "").strip().lower()
-    username = re.sub(r"[^a-z0-9_.@-]+", "", username)
-    return username[:80]
-def normalize_permission_list(values):
-    valid = {item["id"] for item in PERMISSION_CATALOG}
-    out = []
-    for value in values or []:
-        perm = str(value or "").strip()
-        if perm in valid and perm not in out:
-            out.append(perm)
-    return out or ["library.view"]
-def normalize_source_grants(values):
-    out = []
-    for value in values or []:
-        raw = str(value or "").strip()
-        if not raw:
-            continue
-        ref = "*" if raw == "*" else normalize_source_ref(raw)
-        if ref and ref not in out:
-            out.append(ref)
-    return out
-def load_auth_data():
-    data = load_json(AUTH_FILE, auth_default_data())
-    if not isinstance(data, dict):
-        data = auth_default_data()
-    data.setdefault("version", 1)
-    data.setdefault("enabled", True)
-    data.setdefault("users", {})
-    data.setdefault("groups", {})
-    data.setdefault("source_access", {})
-    data.setdefault("settings", {})
-    data["source_access"].setdefault("users", {})
-    data["source_access"].setdefault("groups", {})
-    for name, group in DEFAULT_GROUPS.items():
-        existing = data["groups"].get(name) or {}
-        merged = {**group, **existing}
-        if name in {"Admin", "Manager", "Users"}:
-            merged["system"] = True
-        data["groups"][name] = merged
-    data["source_access"]["groups"].setdefault("Admin", ["*"])
-    data["source_access"]["groups"].setdefault("Manager", ["*"])
-    data["source_access"]["groups"].setdefault("Users", [])
-    ensure_identity_defaults(data)
-    return data
-auth_data = load_auth_data()
-def save_auth_data():
-    save_json(AUTH_FILE, auth_data)
-def auth_initialized():
-    return bool((auth_data.get("users") or {}))
-def hash_password(password, salt=None):
-    password = str(password or "")
-    salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 240_000)
-    return salt, digest.hex()
-def verify_password(password, user):
-    if not user or not user.get("password_hash") or not user.get("password_salt"):
-        return False
-    try:
-        _, digest = hash_password(password, user.get("password_salt"))
-        return hmac.compare_digest(digest, str(user.get("password_hash") or ""))
-    except Exception:
-        return False
-def sanitized_user(user_id, user=None):
-    user = user or (auth_data.get("users") or {}).get(user_id) or {}
-    return {
-        "id": user_id,
-        "username": user.get("username", user_id),
-        "display_name": user.get("display_name") or user.get("username") or user_id,
-        "email": user.get("email", ""),
-        "groups": list(user.get("groups") or []),
-        "disabled": bool(user.get("disabled", False)),
-        "created_at": user.get("created_at", ""),
-        "updated_at": user.get("updated_at", ""),
-        "last_login": user.get("last_login", ""),
-        "auth_backend": user.get("auth_backend", "local"),
-    }
-def group_permissions(group_names):
-    perms = set()
-    for group_name in group_names or []:
-        group = (auth_data.get("groups") or {}).get(group_name) or {}
-        for perm in group.get("permissions") or []:
-            perms.add(str(perm))
-    if "*" in perms:
-        return ["*"] + sorted(p for p in perms if p != "*")
-    return sorted(perms)
-def user_permissions(user):
-    return group_permissions((user or {}).get("groups") or [])
-def user_has_permission(user, permission):
-    if not user:
-        return False
-    perms = set(user.get("permissions") or user_permissions(user))
-    return "*" in perms or permission in perms
-def auth_cleanup_sessions():
-    now = time.time()
-    expired = [token for token, session in AUTH_SESSIONS.items() if float(session.get("expires", 0)) <= now]
-    for token in expired:
-        AUTH_SESSIONS.pop(token, None)
-def create_auth_session(user_id):
-    auth_cleanup_sessions()
-    timeout = int((auth_data.get("settings") or {}).get("session_timeout_minutes") or 720) * 60
-    timeout = max(300, min(timeout, 60 * 60 * 24 * 14))
-    token = secrets.token_urlsafe(36)
-    AUTH_SESSIONS[token] = {"user_id": user_id, "created": time.time(), "expires": time.time() + timeout}
-    return token, timeout
-def auth_token_from_request(request):
-    return request.cookies.get(AUTH_SESSION_COOKIE) or request.headers.get("X-Telesaved-Auth-Token") or ""
-def auth_current_user(request):
-    token = auth_token_from_request(request)
-    if not token:
-        return None
-    auth_cleanup_sessions()
-    session = AUTH_SESSIONS.get(token)
-    if not session:
-        return None
-    user_id = session.get("user_id")
-    user = (auth_data.get("users") or {}).get(user_id)
-    if not user or user.get("disabled"):
-        AUTH_SESSIONS.pop(token, None)
-        return None
-    timeout = int((auth_data.get("settings") or {}).get("session_timeout_minutes") or 720) * 60
-    session["expires"] = time.time() + max(300, min(timeout, 60 * 60 * 24 * 14))
-    enriched = dict(user)
-    enriched["id"] = user_id
-    enriched["permissions"] = user_permissions(user)
-    return enriched
-def auth_status_payload(request=None):
-    user = auth_current_user(request) if request is not None else None
-    payload = {
-        "ok": True,
-        "version": APP_VERSION,
-        "auth_enabled": True,
-        "bootstrap_required": not auth_initialized(),
-        "authenticated": bool(user),
-        "permissions_catalog": PERMISSION_CATALOG,
-        "identity_backends": {"local": True, "ldap": ldap_is_enabled(), "oidc": False, "sso": False},
-        "ldap_status": ldap_status_payload(),
-        "phase": "local-users-groups-source-acl-ldap",
-    }
-    if user:
-        payload["user"] = sanitized_user(user.get("id"), user)
-        payload["permissions"] = user.get("permissions") or []
-        payload["source_grants"] = accessible_source_refs_for_user(user)
-    else:
-        payload["permissions"] = []
-        payload["source_grants"] = []
-    return payload
+# ================= AUTH =================
+# Implementation lives in telesaved/auth.py.
+# _bind() is called here; accessible_source_refs_for_user is patched in after
+# it is defined below (forward reference — see post-LDAP section).
+_auth._bind({
+    "AUTH_FILE":                    AUTH_FILE,
+    "APP_VERSION":                  APP_VERSION,
+    "load_json":                    load_json,
+    "save_json":                    save_json,
+    "now_stamp":                    now_stamp,
+    "normalize_source_ref":         lambda v: normalize_source_ref(v),
+    "ldap_is_enabled":              lambda: ldap_is_enabled(),
+    "ldap_status_payload":          lambda: ldap_status_payload(),
+    "accessible_source_refs_for_user": lambda u: accessible_source_refs_for_user(u),
+    "web":                          web,
+})
+# Aliases — point at the same dict/list objects owned by _auth.
+auth_data          = _auth.auth_data
+AUTH_SESSIONS      = _auth.AUTH_SESSIONS
+PERMISSION_CATALOG = _auth.PERMISSION_CATALOG
+DEFAULT_GROUPS     = _auth.DEFAULT_GROUPS
+AUTH_SESSION_COOKIE    = _auth.AUTH_SESSION_COOKIE
+AUTH_SESSION_SECONDS   = _auth.AUTH_SESSION_SECONDS
+# Forwarding defs — all existing callsites in app.py resolve unchanged.
+def ldap_default_settings():                                    return _auth.ldap_default_settings()
+def identity_default_data():                                    return _auth.identity_default_data()
+def ensure_identity_defaults(data):                             return _auth.ensure_identity_defaults(data)
+def normalize_group_name(value):                                return _auth.normalize_group_name(value)
+def normalize_username(value):                                  return _auth.normalize_username(value)
+def normalize_permission_list(values):                          return _auth.normalize_permission_list(values)
+def normalize_source_grants(values):                            return _auth.normalize_source_grants(values)
+def save_auth_data():                                           return _auth.save_auth_data()
+def auth_initialized():                                         return _auth.auth_initialized()
+def hash_password(password, salt=None):                         return _auth.hash_password(password, salt=salt)
+def verify_password(password, user):                            return _auth.verify_password(password, user)
+def sanitized_user(user_id, user=None):                         return _auth.sanitized_user(user_id, user=user)
+def group_permissions(group_names):                             return _auth.group_permissions(group_names)
+def user_permissions(user):                                     return _auth.user_permissions(user)
+def user_has_permission(user, permission):                      return _auth.user_has_permission(user, permission)
+def auth_cleanup_sessions():                                    return _auth.auth_cleanup_sessions()
+def create_auth_session(user_id):                               return _auth.create_auth_session(user_id)
+def auth_token_from_request(request):                           return _auth.auth_token_from_request(request)
+def auth_current_user(request):                                 return _auth.auth_current_user(request)
+def auth_status_payload(request=None):                          return _auth.auth_status_payload(request=request)
 def make_auth_response(payload, token=None, max_age=None, clear=False):
-    response = web.json_response(payload)
-    if clear:
-        response.del_cookie(AUTH_SESSION_COOKIE, path="/")
-    elif token:
-        response.set_cookie(
-            AUTH_SESSION_COOKIE,
-            token,
-            max_age=max_age or AUTH_SESSION_SECONDS,
-            httponly=True,
-            samesite="Lax",
-            secure=True,
-            path="/",
-        )
-    return response
+    return _auth.make_auth_response(payload, token=token, max_age=max_age, clear=clear)
 def create_local_user(username, password, display_name="", email="", groups=None, disabled=False):
-    username = normalize_username(username)
-    if not username:
-        raise ValueError("Username is required")
-    if len(str(password or "")) < 8:
-        raise ValueError("Password must be at least 8 characters")
-    users = auth_data.setdefault("users", {})
-    if username in users:
-        raise ValueError("Username already exists")
-    clean_groups = [g for g in (groups or ["Users"]) if g in auth_data.get("groups", {})]
-    if not clean_groups:
-        clean_groups = ["Users"]
-    salt, digest = hash_password(password)
-    users[username] = {
-        "username": username,
-        "display_name": str(display_name or username).strip()[:120],
-        "email": str(email or "").strip()[:160],
-        "groups": clean_groups,
-        "disabled": bool(disabled),
-        "password_salt": salt,
-        "password_hash": digest,
-        "created_at": now_stamp(),
-        "updated_at": now_stamp(),
-        "auth_backend": "local",
-    }
-    auth_data.setdefault("source_access", {}).setdefault("users", {}).setdefault(username, [])
-    save_auth_data()
-    return sanitized_user(username, users[username])
+    return _auth.create_local_user(username, password, display_name=display_name, email=email, groups=groups, disabled=disabled)
+def _login_check_and_record_failure(username):  return _auth._login_check_and_record_failure(username)
+def _login_clear_failures(username):            return _auth._login_clear_failures(username)
 # ================= LDAP IDENTITY BACKEND =================
 def ldap_settings_current():
     ensure_identity_defaults(auth_data)
@@ -1618,7 +1351,9 @@ def cleanup_privacy_sessions():
     for token in expired:
         PRIVACY_SESSION_TOKENS.pop(token, None)
 def create_privacy_session():
-    cleanup_privacy_sessions()
+    # Eviction cap: prevent unbounded dict growth (PIN unlock storms).
+    if len(PRIVACY_SESSION_TOKENS) > 500:
+        cleanup_privacy_sessions()
     token = secrets.token_urlsafe(32)
     PRIVACY_SESSION_TOKENS[token] = datetime.now().timestamp() + privacy_expiry_seconds()
     return token
@@ -1969,424 +1704,56 @@ def compute_feedback_bias():
         bias[tag] = max(-0.08, min(net * 0.01, 0.08))
     return bias
 # ================= SQLITE STATE BACKEND =================
-SQLITE_SCHEMA_VERSION = 3
-sqlite_lock = Lock()
-def sqlite_connect():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
-def _column_exists(conn, table, column):
-    """Return True if `column` exists on `table` in the connected SQLite db."""
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(r["name"] == column for r in rows)
-def init_sqlite_db():
-    """Create and migrate the SQLite metadata store.
-    Schema versions:
-      1 — original schema (videos, message_ids, content_hashes, app_meta)
-      2 — adds ai_signals TEXT column to videos
-      3 — adds audio_language TEXT column to videos (indexed)
-    """
-    ensure_directory(BASE_PATH)
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS app_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS message_ids (
-                    message_id TEXT PRIMARY KEY,
-                    value_json TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS content_hashes (
-                    hash TEXT PRIMARY KEY
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS videos (
-                    path TEXT PRIMARY KEY,
-                    tags_json TEXT NOT NULL DEFAULT '[]',
-                    scores_json TEXT NOT NULL DEFAULT '{}',
-                    embedding_json TEXT NOT NULL DEFAULT '[]',
-                    metadata_json TEXT NOT NULL DEFAULT '{}',
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_updated_at ON videos(updated_at)")
-            # ── Schema migrations (additive, column-existence-guarded) ────────
-            existing_version = 1
-            row = conn.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
-            if row:
-                try:
-                    existing_version = int(row["value"])
-                except Exception:
-                    existing_version = 1
-            # v2 — ai_signals column
-            if not _column_exists(conn, "videos", "ai_signals"):
-                try:
-                    conn.execute("ALTER TABLE videos ADD COLUMN ai_signals TEXT")
-                    logger.info("DB migration: added ai_signals column")
-                except Exception:
-                    pass
-            # v3 — audio_language column
-            if not _column_exists(conn, "videos", "audio_language"):
-                try:
-                    conn.execute("ALTER TABLE videos ADD COLUMN audio_language TEXT")
-                    logger.info("DB migration: added audio_language column")
-                except Exception:
-                    pass
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_videos_audio_language ON videos(audio_language)"
-            )
-            # video_tag_labels — always CREATE IF NOT EXISTS (safe for any version)
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS video_tag_labels (
-                    path TEXT NOT NULL,
-                    tag  TEXT NOT NULL,
-                    label_source TEXT NOT NULL DEFAULT 'ai_inferred',
-                    created_at   TEXT NOT NULL,
-                    PRIMARY KEY (path, tag)
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_vtl_label_source ON video_tag_labels(label_source)"
-            )
-            # tag_suggestions — pending user-contributed tag requests
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS tag_suggestions (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tag         TEXT NOT NULL,
-                    suggested_by TEXT NOT NULL,
-                    video_path  TEXT NOT NULL,
-                    created_at  TEXT NOT NULL,
-                    status      TEXT NOT NULL DEFAULT 'pending'
-                )
-                """
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)",
-                ("schema_version", str(SQLITE_SCHEMA_VERSION)),
-            )
-            conn.commit()
-def sqlite_state_has_data():
-    try:
-        with sqlite_connect() as conn:
-            cur = conn.execute("SELECT COUNT(*) AS count FROM videos")
-            if int(cur.fetchone()["count"] or 0) > 0:
-                return True
-            cur = conn.execute("SELECT COUNT(*) AS count FROM message_ids")
-            if int(cur.fetchone()["count"] or 0) > 0:
-                return True
-            cur = conn.execute("SELECT COUNT(*) AS count FROM content_hashes")
-            return int(cur.fetchone()["count"] or 0) > 0
-    except Exception as e:
-        logger.exception("Unable to inspect SQLite state: %s", e)
-        return False
-def sqlite_json_load(value, default):
-    try:
-        if value is None or value == "":
-            return default
-        return json.loads(value)
-    except Exception:
-        return default
-def load_state_from_sqlite(default_state=None):
-    default_state = default_state or {
-        "ids": [],
-        "hashes": [],
-        "tags": {},
-        "scores": {},
-        "embeddings": {},
-        "metadata": {},
-    }
-    try:
-        with sqlite_connect() as conn:
-            ids = []
-            for row in conn.execute("SELECT value_json FROM message_ids ORDER BY rowid"):
-                ids.append(sqlite_json_load(row["value_json"], row["value_json"]))
-            hashes = []
-            for row in conn.execute("SELECT hash FROM content_hashes ORDER BY rowid"):
-                hashes.append(row["hash"])
-            tags_out = {}
-            scores_out = {}
-            embeddings_out = {}
-            metadata_out = {}
-            for row in conn.execute("SELECT path, tags_json, scores_json, embedding_json, metadata_json FROM videos ORDER BY path"):
-                path = row["path"]
-                tags_out[path] = sqlite_json_load(row["tags_json"], [])
-                scores_out[path] = sqlite_json_load(row["scores_json"], {})
-                embeddings_out[path] = sqlite_json_load(row["embedding_json"], [])
-                metadata_out[path] = sqlite_json_load(row["metadata_json"], {})
-            return {
-                "ids": ids,
-                "hashes": hashes,
-                "tags": tags_out,
-                "scores": scores_out,
-                "embeddings": embeddings_out,
-                "metadata": metadata_out,
-            }
-    except Exception as e:
-        logger.exception("Failed to load SQLite state; using JSON fallback: %s", e)
-        return default_state
+# Implementation lives in telesaved/state.py (AD-1, AD-3).
+# _bind() is called in the # STATE section below; forwarding aliases follow.
+import telesaved.state as _state
+SQLITE_SCHEMA_VERSION   = _state.SQLITE_SCHEMA_VERSION
+VALID_LABEL_SOURCES     = _state.VALID_LABEL_SOURCES
+sqlite_lock             = _state.sqlite_lock
+def sqlite_connect():                                               return _state.sqlite_connect()
+def init_sqlite_db():                                               return _state.init_sqlite_db()
+def sqlite_state_has_data():                                        return _state.sqlite_state_has_data()
+def sqlite_json_load(value, default):                               return _state.sqlite_json_load(value, default)
+def load_state_from_sqlite(default_state=None):                     return _state.load_state_from_sqlite(default_state)
 def persist_state_to_sqlite(ids, hashes, tag_map, score_map, embedding_map, metadata_map):
-    """Persist the in-memory library index to SQLite transactionally."""
-    updated_at = now_stamp()
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute("BEGIN")
-            conn.execute("DELETE FROM message_ids")
-            conn.execute("DELETE FROM content_hashes")
-            conn.execute("DELETE FROM videos")
-            conn.executemany(
-                "INSERT OR REPLACE INTO message_ids(message_id, value_json) VALUES (?, ?)",
-                [(str(item), json.dumps(item)) for item in ids],
-            )
-            conn.executemany(
-                "INSERT OR REPLACE INTO content_hashes(hash) VALUES (?)",
-                [(str(item),) for item in hashes if str(item)],
-            )
-            rows = []
-            for path in sorted(tag_map.keys()):
-                rows.append((
-                    path,
-                    json.dumps(tag_map.get(path, [])),
-                    json.dumps(score_map.get(path, {})),
-                    json.dumps(embedding_map.get(path, [])),
-                    json.dumps(metadata_map.get(path, {})),
-                    updated_at,
-                ))
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO videos(path, tags_json, scores_json, embedding_json, metadata_json,
-                updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-            conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)", ("updated_at",
-            updated_at))
-            conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?, ?)", ("backend", "sqlite"))
-            conn.commit()
-def save_ai_signals(rel_path, signals):
-    """Write the ai_signals JSON for a single video row.
-    Called by the pipeline after NudeNet classification.
-    signals is a dict or None; None clears the column.
-    """
-    value = json.dumps(signals) if signals is not None else None
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute(
-                "UPDATE videos SET ai_signals = ? WHERE path = ?",
-                (value, str(rel_path)),
-            )
-            conn.commit()
-
-def get_ai_signals(rel_path):
-    """Return the ai_signals dict for a video, or None if not yet classified."""
-    try:
-        with sqlite_connect() as conn:
-            row = conn.execute("SELECT ai_signals FROM videos WHERE path = ?", (str(rel_path),)).fetchone()
-            if row and row["ai_signals"]:
-                return json.loads(row["ai_signals"])
-    except Exception:
-        pass
-    return None
-
-def save_audio_language(rel_path, language):
-    """Write the ISO 639-1 audio_language for a single video row.
-    Called after Whisper transcription. Empty string clears the column to NULL.
-    """
-    value = str(language).strip() or None
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute(
-                "UPDATE videos SET audio_language = ? WHERE path = ?",
-                (value, str(rel_path)),
-            )
-            conn.commit()
-
-def get_audio_language(rel_path):
-    """Return the stored audio_language code for a video, or None."""
-    try:
-        with sqlite_connect() as conn:
-            row = conn.execute(
-                "SELECT audio_language FROM videos WHERE path = ?", (str(rel_path),)
-            ).fetchone()
-            if row:
-                return row["audio_language"]
-    except Exception:
-        pass
-    return None
-
-# ── label_source helpers ──────────────────────────────────────────────────────
-
-VALID_LABEL_SOURCES = {"ai_inferred", "user_confirmed", "user_corrected", "user_added"}
-
-def write_tag_label(rel_path, tag, label_source):
-    """Upsert a single (path, tag) row in video_tag_labels."""
-    if label_source not in VALID_LABEL_SOURCES:
-        label_source = "ai_inferred"
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(path, tag) DO UPDATE SET
-                    label_source = excluded.label_source,
-                    created_at   = excluded.created_at
-                """,
-                (str(rel_path), str(tag), label_source, now_stamp()),
-            )
-            conn.commit()
-
-def write_ai_tag_labels(rel_path, tag_list):
-    """Write ai_inferred label rows for a list of tags assigned by the AI pipeline."""
-    ts = now_stamp()
-    rows = [(str(rel_path), str(t), "ai_inferred", ts) for t in tag_list]
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.executemany(
-                """
-                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(path, tag) DO NOTHING
-                """,
-                rows,
-            )
-            conn.commit()
-
-def get_tag_labels(rel_path):
-    """Return {tag: label_source} for a video. Tags not in the table are not returned."""
-    try:
-        with sqlite_connect() as conn:
-            rows = conn.execute(
-                "SELECT tag, label_source FROM video_tag_labels WHERE path = ?",
-                (str(rel_path),),
-            ).fetchall()
-            return {r["tag"]: r["label_source"] for r in rows}
-    except Exception:
-        return {}
-
-def migrate_legacy_tag_labels(rel_path, label_source="ai_inferred"):
-    """Write label rows for all tags on a video that lack one. Used by the migration tool."""
-    existing = get_tag_labels(rel_path)
-    video_tags = tags.get(str(rel_path), [])
-    new_rows = [
-        (str(rel_path), str(t), label_source, now_stamp())
-        for t in video_tags
-        if t not in existing
-    ]
-    if not new_rows:
-        return 0
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.executemany(
-                """
-                INSERT INTO video_tag_labels (path, tag, label_source, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(path, tag) DO NOTHING
-                """,
-                new_rows,
-            )
-            conn.commit()
-    return len(new_rows)
-
+    return _state.persist_state_to_sqlite(ids, hashes, tag_map, score_map, embedding_map, metadata_map)
+def save_ai_signals(rel_path, signals):                             return _state.save_ai_signals(rel_path, signals)
+def get_ai_signals(rel_path):                                       return _state.get_ai_signals(rel_path)
+def save_audio_language(rel_path, language):                        return _state.save_audio_language(rel_path, language)
+def get_audio_language(rel_path):                                   return _state.get_audio_language(rel_path)
+def write_tag_label(rel_path, tag, label_source):                   return _state.write_tag_label(rel_path, tag, label_source)
+def write_ai_tag_labels(rel_path, tag_list):                        return _state.write_ai_tag_labels(rel_path, tag_list)
+def get_tag_labels(rel_path):                                       return _state.get_tag_labels(rel_path)
+def migrate_legacy_tag_labels(rel_path, label_source="ai_inferred", tag_map=None):
+    return _state.migrate_legacy_tag_labels(rel_path, label_source=label_source, tag_map=tag_map)
 def write_legacy_state_snapshot(ids, hashes, tag_map, score_map, embedding_map, metadata_map):
-    """Write a JSON snapshot for backups, diagnostics, and rollback tools."""
-    save_json(
-        STATE_FILE,
-        {
-            "backend": "sqlite",
-            "database_file": DB_FILE,
-            "snapshot_created_at": now_stamp(),
-            "ids": list(ids),
-            "hashes": list(hashes),
-            "tags": tag_map,
-            "scores": score_map,
-            "embeddings": embedding_map,
-            "metadata": metadata_map,
-        }
-    )
-def sqlite_backend_info():
-    info = {
-        "backend": "sqlite",
-        "database_file": DB_FILE,
-        "exists": os.path.exists(DB_FILE),
-        "size": os.path.getsize(DB_FILE) if os.path.exists(DB_FILE) else 0,
-        "size_human": format_bytes(os.path.getsize(DB_FILE)) if os.path.exists(DB_FILE) else "0 B",
-        "videos": 0,
-        "message_ids": 0,
-        "content_hashes": 0,
-        "schema_version": SQLITE_SCHEMA_VERSION,
-    }
-    try:
-        with sqlite_connect() as conn:
-            info["videos"] = int(conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] or 0)
-            info["message_ids"] = int(conn.execute("SELECT COUNT(*) FROM message_ids").fetchone()[0] or 0)
-            info["content_hashes"] = int(conn.execute("SELECT COUNT(*) FROM content_hashes").fetchone()[0] or
-            0)
-            row = conn.execute("SELECT value FROM app_meta WHERE key='updated_at'").fetchone()
-            info["updated_at"] = row["value"] if row else ""
-    except Exception as e:
-        info["error"] = str(e)
-    return info
+    return _state.write_legacy_state_snapshot(ids, hashes, tag_map, score_map, embedding_map, metadata_map)
+def sqlite_backend_info():                                          return _state.sqlite_backend_info()
+def append_audit_log(actor, action, detail=""):                     return _state.append_audit_log(actor, action, detail)
+def get_audit_log(limit=200):                                       return _state.get_audit_log(limit)
 # ================= STATE =================
-init_sqlite_db()
-legacy_state = load_json(
-    STATE_FILE,
-    {
-        "ids": [],
-        "hashes": [],
-        "tags": {},
-        "scores": {},
-        "embeddings": {},
-        "metadata": {}
-    }
-)
-if not sqlite_state_has_data() and legacy_state.get("tags"):
-    logger.info("Migrating legacy JSON state to SQLite database: %s", DB_FILE)
-    persist_state_to_sqlite(
-        legacy_state.get("ids", []),
-        legacy_state.get("hashes", []),
-        legacy_state.get("tags", {}),
-        legacy_state.get("scores", {}),
-        legacy_state.get("embeddings", {}),
-        legacy_state.get("metadata", {}),
-    )
-state = load_state_from_sqlite(legacy_state)
-state.setdefault("ids", [])
-state.setdefault("hashes", [])
-state.setdefault("tags", {})
-state.setdefault("scores", {})
-state.setdefault("embeddings", {})
-state.setdefault("metadata", {})
-state_ids = set(state.get("ids", []))
-state_hashes = set(state.get("hashes", []))
-tags = state.get("tags", {})
-scores_store = state.get("scores", {})
-embeddings_store = state.get("embeddings", {})
-metadata_store = state.get("metadata", {})
+# Bind config + helpers into telesaved/state.py, then alias the six globals so
+# all 390+ downstream call sites in app.py continue to resolve unchanged.
+_state._bind({
+    "DB_FILE":           DB_FILE,
+    "STATE_FILE":        STATE_FILE,
+    "BASE_PATH":         BASE_PATH,
+    "load_json":         load_json,
+    "save_json":         save_json,
+    "now_stamp":         now_stamp,
+    "format_bytes":      format_bytes,
+    "ensure_directory":  ensure_directory,
+})
+# Alias the six in-memory globals — these names now point at the same dict/set
+# objects owned by _state, so all mutations flow through the same objects.
+state_ids        = _state.state_ids
+state_hashes     = _state.state_hashes
+tags             = _state.tags
+scores_store     = _state.scores_store
+embeddings_store = _state.embeddings_store
+metadata_store   = _state.metadata_store
 def save_state():
-    persist_state_to_sqlite(state_ids, state_hashes, tags, scores_store, embeddings_store, metadata_store)
-    write_legacy_state_snapshot(state_ids, state_hashes, tags, scores_store, embeddings_store, metadata_store)
+    _state.save_state()
 def compute_library_dashboard_stats(probe_missing_limit=25):
     """Build Administration dashboard statistics for the indexed library.
     The dashboard uses cached duration metadata where available. To avoid a long
@@ -2801,270 +2168,51 @@ bulk_job = {
     "errors": 0,
     "mode": "",
 }
-# ================= JOB / QUEUE CONTROL =================
-job_lock = Lock()
-jobs = load_json(JOB_FILE, {})
-if not isinstance(jobs, dict):
-    jobs = {}
-for _job in list(jobs.values()):
-    if _job.get("status") in {"running", "paused", "cancel_requested"}:
-        _job["status"] = "interrupted"
-        _job["control"] = "finished"
-        _job["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        _job["note"] = "Marked interrupted during application startup"
-JOB_HISTORY_LIMIT = 500
-def persist_jobs():
-    try:
-        with job_lock:
-            snapshot = json.loads(json.dumps(jobs))
-        save_json(JOB_FILE, snapshot)
-    except Exception as e:
-        logger.warning("Failed to persist job state: %s", e)
+# ================= JOBS =================
+# Implementation lives in telesaved/jobs.py.
+# task_handlers reference functions defined later — lambdas used for forward references.
+_jobs._bind({
+    "JOB_FILE":               JOB_FILE,
+    "load_json":              load_json,
+    "save_json":              save_json,
+    "datetime":               datetime,
+    "hashlib":                hashlib,
+    "timestamp_for_filename": timestamp_for_filename,
+    "tags":                   tags,
+    "metadata_store":         metadata_store,
+    "task_handlers": {
+        "index_sweep":    lambda *a, **kw: sweep_missing_index_entries(*a, **kw),
+        "duplicate_scan": lambda *a, **kw: build_duplicate_report(*a, **kw),
+        "audio_missing":  lambda *a, **kw: analyze_audio_for_path(*a, **kw),
+        "reprocess_all":  lambda *a, **kw: reprocess_file(*a, **kw),
+    },
+})
+# Aliases — same objects owned by _jobs.
+job_lock         = _jobs.job_lock
+jobs             = _jobs.jobs
+queued_job_ids   = _jobs.queued_job_ids
+job_engine_state = _jobs.job_engine_state
+JOB_HISTORY_LIMIT = _jobs.JOB_HISTORY_LIMIT
+# Forwarding defs — all existing callsites in app.py resolve unchanged.
+def persist_jobs():                                             return _jobs.persist_jobs()
 def create_job(kind, title, total=0, source_ref="", metadata=None, status="running"):
-    job_id = f"{kind}-{timestamp_for_filename()}-{hashlib.sha1((title +datetime.now().isoformat()).encode('utf-8')).hexdigest()[:8]}"
-    job = {
-        "id": job_id,
-        "kind": kind,
-        "title": title,
-        "status": status,
-        "control": "queued" if status == "queued" else "running",
-        "current": "",
-        "processed": 0,
-        "total": int(total or 0),
-        "percent": 0,
-        "errors": 0,
-        "source_ref": source_ref,
-        "note": "",
-        "started_at": datetime.now().isoformat(timespec="seconds"),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "finished_at": "",
-        "metadata": metadata or {},
-    }
-    with job_lock:
-        jobs[job_id] = job
-        if len(jobs) > JOB_HISTORY_LIMIT:
-            inactive = [j for j in jobs.values() if j.get("status") not in {"running", "paused",
-            "cancel_requested"}]
-            inactive.sort(key=lambda x: x.get("updated_at", ""))
-            for old in inactive[: max(0, len(jobs) - JOB_HISTORY_LIMIT)]:
-                jobs.pop(old["id"], None)
-    logger.info("Job created: %s %s", job_id, title)
-    persist_jobs()
-    return job_id
-def get_job(job_id):
-    with job_lock:
-        job = jobs.get(job_id)
-        return dict(job) if job else None
-def update_job(job_id, **updates):
-    if not job_id:
-        return None
-    with job_lock:
-        job = jobs.get(job_id)
-        if not job:
-            return None
-        job.update(updates)
-        if job.get("total"):
-            try:
-                job["percent"] = int((float(job.get("processed", 0)) / float(job.get("total", 1))) * 100)
-            except Exception:
-                pass
-        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        snapshot = dict(job)
-    persist_jobs()
-    return snapshot
-def finish_job(job_id, status="complete", note=""):
-    if not job_id:
-        return None
-    return update_job(job_id, status=status, control="finished",
-    finished_at=datetime.now().isoformat(timespec="seconds"), note=note)
-def job_cancel_requested(job_id):
-    job = get_job(job_id)
-    return bool(job and job.get("control") == "cancel_requested")
-def job_pause_requested(job_id):
-    job = get_job(job_id)
-    return bool(job and job.get("control") == "paused")
-def request_job_control(job_id, control):
-    if control not in {"paused", "running", "cancel_requested"}:
-        raise ValueError("Invalid job control state")
-    job = update_job(job_id, control=control, status="paused" if control == "paused" else ("cancel_requested"
-    if control == "cancel_requested" else "running"))
-    if not job:
-        raise KeyError("Job not found")
-    logger.warning("Job control changed: %s -> %s", job_id, control)
-    return job
-def wait_job_if_paused_sync(job_id):
-    import time
-    while job_pause_requested(job_id):
-        update_job(job_id, status="paused", note="Paused by user")
-        time.sleep(1)
-    if job_id and get_job(job_id) and get_job(job_id).get("status") == "paused":
-        update_job(job_id, status="running", note="Resumed")
-async def wait_job_if_paused(job_id):
-    while job_pause_requested(job_id):
-        update_job(job_id, status="paused", note="Paused by user")
-        await asyncio.sleep(1)
-    if job_id and get_job(job_id) and get_job(job_id).get("status") == "paused":
-        update_job(job_id, status="running", note="Resumed")
-async def run_tracked_blocking_job(kind, title, func, *args, total=1, current="", source_ref="",
-metadata=None, **kwargs):
-    """Run a blocking operation while recording it in the Jobs page.
-    This is intentionally lightweight: the work still happens in the request that
-    started it, but the Jobs screen can now show the operation while it is
-    running and retain it in recent history after it completes.
-    """
-    job_id = create_job(kind, title, total=total, source_ref=source_ref, metadata=metadata or {})
-    update_job(job_id, status="running", control="running", current=current or title, processed=0,
-    total=total, note="Started")
-    try:
-        result = await asyncio.to_thread(func, *args, **kwargs)
-        update_job(job_id, processed=total or 1, total=total or 1, current=current or title, errors=0)
-        finish_job(job_id, "complete", "Complete")
-        return result, get_job(job_id)
-    except Exception as e:
-        logger.exception("Tracked job failed: %s", title)
-        update_job(job_id, errors=1, current=current or title)
-        finish_job(job_id, "failed", str(e))
-        raise
-def attach_job_to_result(result, job):
-    if isinstance(result, dict):
-        result = dict(result)
-        result["job"] = job
-        result.setdefault("job_id", job.get("id") if job else "")
-        return result
-    return {"ok": True, "result": result, "job": job, "job_id": job.get("id") if job else ""}
-def job_summary():
-    with job_lock:
-        all_jobs = sorted((dict(j) for j in jobs.values()), key=lambda x: x.get("updated_at", ""),
-        reverse=True)
-    active = [j for j in all_jobs if j.get("status") in {"queued", "running", "paused", "cancel_requested"}]
-    recent = all_jobs[:100]
-    counts = {}
-    for job in all_jobs:
-        counts[job.get("status", "unknown")] = counts.get(job.get("status", "unknown"), 0) + 1
-    return {"active": active, "recent": recent, "counts": counts, "engine": job_engine_summary()}
-queued_job_ids = deque([job_id for job_id, job in jobs.items() if job.get("status") == "queued"])
-job_engine_state = {
-    "enabled": True,
-    "worker_running": False,
-    "started_at": "",
-    "last_tick": "",
-    "current_job_id": "",
-    "queued": len(queued_job_ids),
-}
-def job_engine_summary():
-    job_engine_state["queued"] = len(queued_job_ids)
-    return dict(job_engine_state)
-def enqueue_system_job(task, title=None, payload=None):
-    payload = payload or {}
-    titles = {
-        "index_sweep": "Sweep missing index entries",
-        "duplicate_scan": "Scan duplicate candidates",
-        "audio_missing": "Analyze missing audio metadata",
-        "reprocess_all": "Reprocess all indexed files",
-    }
-    if task not in titles:
-        raise ValueError("Unsupported queued job task")
-    job = create_job("system", title or titles[task], total=0, metadata={"task": task, "payload": payload},
-    status="queued")
-    queued_job_ids.append(job)
-    job_engine_state["queued"] = len(queued_job_ids)
-    persist_jobs()
-    logger.info("Queued system job %s: %s", job, task)
-    return get_job(job)
-async def run_queued_system_job(job_id):
-    job = get_job(job_id)
-    if not job:
-        return
-    metadata = job.get("metadata") or {}
-    task = metadata.get("task")
-    payload = metadata.get("payload") or {}
-    update_job(job_id, status="running", control="running", note=f"Running {task}")
-    try:
-        if task == "index_sweep":
-            update_job(job_id, current="Checking indexed files", total=len(tags), processed=0)
-            result = await asyncio.to_thread(sweep_missing_index_entries, "job_engine")
-            update_job(job_id, processed=result.get("checked", 0), total=result.get("checked", len(tags)),
-            errors=result.get("errors", 0), metadata={**metadata, "result": result})
-            finish_job(job_id, "complete", f"Sweep complete: removed {result.get('removed', 0)} missing records")
-        elif task == "duplicate_scan":
-            limit = int(payload.get("limit", 1000) or 1000)
-            update_job(job_id, current="Building duplicate report", total=limit, processed=0)
-            result = await asyncio.to_thread(build_duplicate_report, True, max(0, min(limit, 5000)))
-            group_count = len(result.get("groups", [])) if isinstance(result, dict) else 0
-            update_job(job_id, processed=limit, total=limit, metadata={**metadata, "result_summary":
-            {"groups": group_count}})
-            finish_job(job_id, "complete", f"Duplicate scan complete: {group_count} groups")
-        elif task == "audio_missing":
-            limit = max(1, min(int(payload.get("limit", 50) or 50), 500))
-            transcribe = bool(payload.get("transcribe", False))
-            processed = 0
-            errors = 0
-            update_job(job_id, total=limit, processed=0, current="Scanning missing audio metadata")
-            for rel_path in list(tags.keys()):
-                await wait_job_if_paused(job_id)
-                if job_cancel_requested(job_id):
-                    finish_job(job_id, "cancelled", "Cancelled by user")
-                    return
-                audio = (metadata_store.get(rel_path, {}) or {}).get("audio") or {}
-                if audio and audio.get("status") == "complete":
-                    continue
-                try:
-                    update_job(job_id, current=rel_path, processed=processed, errors=errors)
-                    await asyncio.to_thread(analyze_audio_for_path, rel_path, False, transcribe)
-                    processed += 1
-                except Exception:
-                    errors += 1
-                    logger.exception("Queued audio analysis failed for %s", rel_path)
-                if processed >= limit:
-                    break
-            update_job(job_id, processed=processed, total=max(limit, processed), errors=errors)
-            finish_job(job_id, "complete", f"Audio analysis complete: {processed} processed, {errors} errors")
-        elif task == "reprocess_all":
-            paths = sorted(tags.keys())
-            update_job(job_id, total=len(paths), processed=0, current="Preparing reprocess")
-            errors = 0
-            for idx, rel_path in enumerate(paths, start=1):
-                await wait_job_if_paused(job_id)
-                if job_cancel_requested(job_id):
-                    finish_job(job_id, "cancelled", "Cancelled by user")
-                    return
-                try:
-                    update_job(job_id, current=rel_path, processed=idx - 1, errors=errors, note="Reprocessing file")
-                    await asyncio.to_thread(reprocess_file, rel_path)
-                except Exception:
-                    errors += 1
-                    logger.exception("Queued reprocess failed for %s", rel_path)
-                update_job(job_id, processed=idx, errors=errors)
-            finish_job(job_id, "complete", f"Reprocess complete with {errors} errors")
-        else:
-            finish_job(job_id, "failed", f"Unsupported task: {task}")
-    except Exception as e:
-        logger.exception("Queued system job failed: %s", job_id)
-        finish_job(job_id, "failed", str(e))
-async def job_worker_loop():
-    if job_engine_state.get("worker_running"):
-        return
-    job_engine_state["worker_running"] = True
-    job_engine_state["started_at"] = datetime.now().isoformat(timespec="seconds")
-    logger.info("Persistent job worker started")
-    while True:
-        job_engine_state["last_tick"] = datetime.now().isoformat(timespec="seconds")
-        try:
-            if queued_job_ids:
-                job_id = queued_job_ids.popleft()
-                job_engine_state["current_job_id"] = job_id
-                job_engine_state["queued"] = len(queued_job_ids)
-                job = get_job(job_id)
-                if job and job.get("control") != "cancel_requested" and job.get("status") == "queued":
-                    await run_queued_system_job(job_id)
-                elif job and job.get("control") == "cancel_requested":
-                    finish_job(job_id, "cancelled", "Cancelled before start")
-                job_engine_state["current_job_id"] = ""
-            else:
-                await asyncio.sleep(2)
-        except Exception:
-            logger.exception("Job worker loop error")
-            await asyncio.sleep(5)
+    return _jobs.create_job(kind, title, total=total, source_ref=source_ref, metadata=metadata, status=status)
+def get_job(job_id):                                            return _jobs.get_job(job_id)
+def update_job(job_id, **updates):                              return _jobs.update_job(job_id, **updates)
+def finish_job(job_id, status="complete", note=""):             return _jobs.finish_job(job_id, status=status, note=note)
+def job_cancel_requested(job_id):                               return _jobs.job_cancel_requested(job_id)
+def job_pause_requested(job_id):                                return _jobs.job_pause_requested(job_id)
+def request_job_control(job_id, control):                       return _jobs.request_job_control(job_id, control)
+def wait_job_if_paused_sync(job_id):                            return _jobs.wait_job_if_paused_sync(job_id)
+async def wait_job_if_paused(job_id):                           return await _jobs.wait_job_if_paused(job_id)
+async def run_tracked_blocking_job(kind, title, func, *args, total=1, current="", source_ref="", metadata=None, **kwargs):
+    return await _jobs.run_tracked_blocking_job(kind, title, func, *args, total=total, current=current, source_ref=source_ref, metadata=metadata, **kwargs)
+def attach_job_to_result(result, job):                          return _jobs.attach_job_to_result(result, job)
+def job_summary():                                              return _jobs.job_summary()
+def job_engine_summary():                                       return _jobs.job_engine_summary()
+def enqueue_system_job(task, title=None, payload=None):         return _jobs.enqueue_system_job(task, title=title, payload=payload)
+async def run_queued_system_job(job_id):                        return await _jobs.run_queued_system_job(job_id)
+async def job_worker_loop():                                    return await _jobs.job_worker_loop()
 # ================= INDEX SWEEP STATUS =================
 # Runs automatically every six hours (four times daily) and can also be
 # triggered manually from Administration -> System.
@@ -3098,1382 +2246,180 @@ def clear_download_status(message_id):
     download_status.pop(str(message_id), None)
 def record_download_history(item):
     download_history.appendleft(item)
-# ================= MODEL SETUP =================
-device = "cpu"
-logger.info("Using device: %s", device)
-logger.info("Loading CLIP model...")
-clip_model, preprocess = clip.load("ViT-B/32", device=device)
-logger.info("Loading YOLO model...")
-yolo_model = YOLO("yolov8n.pt")
-try:
-    yolo_model.to("cpu")
-except Exception:
-    pass
-text_tokens = {
-    tag: clip.tokenize(prompts).to(device)
-    for tag, prompts in PROMPTS.items()
-}
-# ================= NUDENET CLASSIFIER =================
-_nudenet_detector = None
-_nudenet_load_attempted = False
-
-def _get_nudenet():
-    """Lazy-load NudeNet detector. Returns None if NudeNet is not installed."""
-    global _nudenet_detector, _nudenet_load_attempted
-    if _nudenet_load_attempted:
-        return _nudenet_detector
-    _nudenet_load_attempted = True
-    try:
-        from nudenet import NudeDetector
-        _nudenet_detector = NudeDetector()
-        logger.info("NudeNet detector loaded successfully.")
-    except Exception as e:
-        logger.warning("NudeNet not available — adult content classification disabled: %s", e)
-        _nudenet_detector = None
-    return _nudenet_detector
-
-# Map NudeNet labels to our taxonomy vocabulary.
-_NUDENET_SCENE_COMPOSITION_RULES = [
-    # (label_substring, performer count signal)
-    ("MALE_GENITALIA",    "male_detected"),
-    ("FEMALE_GENITALIA",  "female_detected"),
-    ("FEMALE_BREAST",     "female_detected"),
-    ("MALE_BREAST",       "male_detected"),
-    ("BUTTOCKS",          "body_detected"),
-    ("ANUS",              "body_detected"),
-    ("FEET",              "body_detected"),
-    ("ARMPITS",           "body_detected"),
-    ("BELLY",             "body_detected"),
-    ("FACE_FEMALE",       "female_face"),
-    ("FACE_MALE",         "male_face"),
-]
-
-def _nudenet_signals_from_detections(detections, threshold):
-    """Convert raw NudeNet detections into a structured ai_signals dict.
-
-    Args:
-        detections: list of dicts from NudeDetector.detect(), each with 'class' and 'score' keys.
-        threshold: float confidence threshold; detections below this are ignored.
-
-    Returns:
-        dict with scene_composition, performer_presentations, production_type, pov_type, setting keys,
-        or None if no detections exceed the threshold.
-    """
-    if not detections:
-        return None
-
-    male_signals   = 0
-    female_signals = 0
-    body_signals   = 0
-
-    for det in detections:
-        score = float(det.get("score", 0.0))
-        if score < threshold:
-            continue
-        label = str(det.get("class", "")).upper()
-        if "MALE_GENITALIA" in label or "FACE_MALE" in label:
-            male_signals += 1
-        elif "FEMALE_GENITALIA" in label or "FEMALE_BREAST" in label or "FACE_FEMALE" in label:
-            female_signals += 1
-        else:
-            body_signals += 1
-
-    if male_signals == 0 and female_signals == 0 and body_signals == 0:
-        return None  # nothing above threshold
-
-    # Derive scene_composition
-    if male_signals > 0 and female_signals > 0:
-        scene_comp = "group_mixed" if (male_signals + female_signals) > 2 else "duo_mf"
-    elif male_signals > 1:
-        scene_comp = "group_all_m" if male_signals > 2 else "duo_mm"
-    elif female_signals > 1:
-        scene_comp = "group_all_f" if female_signals > 2 else "duo_ff"
-    elif male_signals == 1 and female_signals == 0:
-        scene_comp = "solo_m"
-    elif female_signals == 1 and male_signals == 0:
-        scene_comp = "solo_f"
-    else:
-        scene_comp = "unknown"
-
-    # Derive performer_presentations list
-    presentations = []
-    if male_signals > 0:
-        presentations.append("male")
-    if female_signals > 0:
-        presentations.append("female")
-
-    return {
-        "scene_composition": scene_comp,
-        "performer_presentations": presentations,
-        "production_type": None,   # not classifiable from NudeNet alone
-        "pov_type": None,          # not classifiable from NudeNet alone
-        "setting": None,           # not classifiable from NudeNet alone
-        "nudenet_detections_above_threshold": male_signals + female_signals + body_signals,
-    }
-
+# ================= PIPELINE =================
+# Implementation lives in telesaved/pipeline.py (AD-4).
+# _bind() is called after state is loaded; forwarding aliases follow so all
+# existing call sites in app.py continue to work without modification.
+_pipeline._bind({
+    "FRAME_PATH":                   FRAME_PATH,
+    "THUMB_PATH":                   THUMB_PATH,
+    "PREVIEW_PATH":                 PREVIEW_PATH,
+    "SCENE_PATH":                   SCENE_PATH,
+    "BASE_PATH":                    BASE_PATH,
+    "FAISS_INDEX_FILE":             FAISS_INDEX_FILE,
+    "FAISS_KEYS_FILE":              FAISS_KEYS_FILE,
+    "APP_VERSION":                  APP_VERSION,
+    "PROMPTS":                      PROMPTS,
+    "TAG_WEIGHTS":                  TAG_WEIGHTS,
+    "TAG_THRESHOLDS":               TAG_THRESHOLDS,
+    "DEFAULT_NUDENET_THRESHOLD":    DEFAULT_NUDENET_THRESHOLD,
+    "embeddings_store":             embeddings_store,
+    "scores_store":                 scores_store,
+    "tags":                         tags,
+    "metadata_store":               metadata_store,
+    "save_state":                   save_state,
+    "save_ai_signals":              save_ai_signals,
+    "write_ai_tag_labels":          write_ai_tag_labels,
+    "compute_feedback_bias":        compute_feedback_bias,
+    "get_video_duration_seconds":   get_video_duration_seconds,
+    "normalize_score":              normalize_score,
+    "get_effective_tags":           get_effective_tags,
+    "get_manual_override":          get_manual_override,
+    "candidate_storage_roots":      candidate_storage_roots,
+    "safe_abs_path":                safe_abs_path,
+    "get_download_directory":       get_download_directory,
+    "format_duration":              format_duration,
+    "now_stamp":                    now_stamp,
+    "ensure_directory":             ensure_directory,
+    "delete_scene_thumbnails_for_file": delete_scene_thumbnails_for_file,
+    "scene_url_for_file":           scene_url_for_file,
+    "thumb_abs_path_for_file":      thumb_abs_path_for_file,
+    "preview_abs_path_for_file":    preview_abs_path_for_file,
+    "scene_abs_path_for_file":      scene_abs_path_for_file,
+    "thumb_rel_path_for_file":      thumb_rel_path_for_file,
+    "settings_data":                settings_data,
+})
+# Copy initial FAISS index from pipeline into app scope so all external
+# callsites that declare `global faiss_index, faiss_keys` work unchanged.
+faiss_index = _pipeline.faiss_index
+faiss_keys  = _pipeline.faiss_keys
+# Forwarding aliases — all existing call sites resolve through these names.
 def run_nudenet_analysis(frame_paths, threshold=None):
-    """Run NudeNet on a sample of extracted frame paths.
-
-    Returns an ai_signals dict, or None if NudeNet is unavailable or no
-    detections exceed the configured threshold.
-    """
-    if threshold is None:
-        threshold = float(settings_data.get("nudenet_threshold", DEFAULT_NUDENET_THRESHOLD))
-    detector = _get_nudenet()
-    if detector is None:
-        return None
-    # Sample up to 6 evenly-spaced frames to keep CPU cost reasonable.
-    sample = frame_paths[::max(1, len(frame_paths) // 6)][:6]
-    all_detections = []
-    for frame_path in sample:
-        try:
-            result = detector.detect(frame_path)
-            if isinstance(result, list):
-                all_detections.extend(result)
-        except Exception as e:
-            logger.warning("NudeNet detection failed for frame %s: %s", frame_path, e)
-    return _nudenet_signals_from_detections(all_detections, threshold)
-# ================= FRAME EXTRACTION =================
+    return _pipeline.run_nudenet_analysis(frame_paths, threshold=threshold)
 def extract_frames(video_path):
-    folder = os.path.join(FRAME_PATH, os.path.basename(video_path))
-    os.makedirs(folder, exist_ok=True)
-    for existing in os.listdir(folder):
-        if existing.lower().endswith(".jpg"):
-            try:
-                os.remove(os.path.join(folder, existing))
-            except Exception:
-                pass
-    pattern = os.path.join(folder, "frame_%03d.jpg")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        video_path,
-        "-vf",
-        "fps=2",
-        "-t",
-        "6",
-        pattern,
-    ]
-    logger.info("Extracting frames from %s", video_path)
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    frames = sorted(
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if f.lower().endswith(".jpg")
-    )
-    return frames
-# ================= PREVIEW GENERATION =================
+    return _pipeline.extract_frames(video_path)
 def generate_thumbnail(frame_paths, rel_path):
-    if not frame_paths:
-        return None
-    thumb_path = thumb_abs_path_for_file(rel_path)
-    os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
-    try:
-        img = Image.open(frame_paths[0]).convert("RGB")
-        img.thumbnail((480, 270))
-        img.save(thumb_path, format="JPEG", quality=82, optimize=True)
-        logger.info("Generated thumbnail %s", thumb_path)
-        return thumb_path
-    except Exception as e:
-        logger.exception("Failed to generate thumbnail for %s: %s", rel_path, e)
-        return None
+    return _pipeline.generate_thumbnail(frame_paths, rel_path)
 def generate_preview_gif(frame_paths, rel_path):
-    if not frame_paths:
-        return None
-    preview_path = preview_abs_path_for_file(rel_path)
-    os.makedirs(os.path.dirname(preview_path), exist_ok=True)
-    frames = []
-    for p in frame_paths[:8]:
-        try:
-            img = Image.open(p).convert("RGB")
-            img.thumbnail((320, 180))
-            frames.append(img)
-        except Exception as e:
-            logger.warning("Failed to use frame %s in preview GIF: %s", p, e)
-    if not frames:
-        return None
-    try:
-        first, rest = frames[0], frames[1:]
-        first.save(
-            preview_path,
-            format="GIF",
-            save_all=True,
-            append_images=rest,
-            duration=350,
-            loop=0,
-            optimize=True,
-        )
-        logger.info("Generated preview GIF %s", preview_path)
-        return preview_path
-    except Exception as e:
-        logger.exception("Failed to generate preview GIF for %s: %s", rel_path, e)
-        return None
-# ================= SCENE / TIMELINE DETECTION =================
+    return _pipeline.generate_preview_gif(frame_paths, rel_path)
 def parse_scene_times_from_ffmpeg(stderr_text):
-    times = []
-    if not stderr_text:
-        return times
-    for match in re.finditer(r"pts_time:([0-9]+(?:\.[0-9]+)?)", stderr_text):
-        try:
-            times.append(float(match.group(1)))
-        except Exception:
-            pass
-    return times
+    return _pipeline.parse_scene_times_from_ffmpeg(stderr_text)
 def normalize_scene_times(times, duration, min_gap=6.0, max_scenes=32):
-    cleaned = []
-    try:
-        duration = float(duration or 0.0)
-    except Exception:
-        duration = 0.0
-    try:
-        min_gap = max(1.0, float(min_gap or 6.0))
-    except Exception:
-        min_gap = 6.0
-    try:
-        max_scenes = max(2, min(int(max_scenes or 32), 120))
-    except Exception:
-        max_scenes = 32
-    for value in sorted(set(round(float(t), 2) for t in times if t is not None)):
-        if value < 0:
-            continue
-        if duration > 0 and value > duration:
-            continue
-        if cleaned and value - cleaned[-1] < min_gap:
-            continue
-        cleaned.append(value)
-        if len(cleaned) >= max_scenes:
-            break
-    if not cleaned or cleaned[0] > 1.0:
-        cleaned.insert(0, 0.0)
-    # For videos where scene detection finds almost nothing, create useful
-    # chapter-like markers so the detail page still becomes navigable.
-    if duration >= 120 and len(cleaned) < 4:
-        target_count = min(max_scenes, 8 if duration < 1800 else 12)
-        uniform = [round((duration * idx) / target_count, 2) for idx in range(target_count)]
-        merged = sorted(set(cleaned + uniform))
-        cleaned = []
-        for value in merged:
-            if cleaned and value - cleaned[-1] < min_gap:
-                continue
-            cleaned.append(value)
-            if len(cleaned) >= max_scenes:
-                break
-    return cleaned[:max_scenes]
+    return _pipeline.normalize_scene_times(times, duration, min_gap=min_gap, max_scenes=max_scenes)
 def extract_scene_detection_times(video_path, threshold=0.35, max_scenes=32, min_gap=6.0):
-    try:
-        threshold = max(0.05, min(float(threshold or 0.35), 0.95))
-    except Exception:
-        threshold = 0.35
-    try:
-        max_scenes = max(2, min(int(max_scenes or 32), 120))
-    except Exception:
-        max_scenes = 32
-    duration = get_video_duration_seconds(video_path)
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-i", video_path,
-        "-vf", f"select='gt(scene,{threshold})',showinfo",
-        "-an",
-        "-f", "null",
-        "-",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        times = parse_scene_times_from_ffmpeg(result.stderr or "")
-    except subprocess.TimeoutExpired:
-        logger.warning("Scene detection timed out for %s", video_path)
-        times = []
-    except Exception as e:
-        logger.warning("Scene detection failed for %s: %s", video_path, e)
-        times = []
-    return normalize_scene_times(times, duration, min_gap=min_gap, max_scenes=max_scenes), duration
+    return _pipeline.extract_scene_detection_times(video_path, threshold=threshold, max_scenes=max_scenes, min_gap=min_gap)
 def extract_scene_thumbnail(video_path, rel_path, scene_index, timestamp):
-    thumb_path = scene_abs_path_for_file(rel_path, scene_index)
-    ensure_directory(os.path.dirname(thumb_path))
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss", str(max(0.0, float(timestamp or 0.0))),
-        "-i", video_path,
-        "-frames:v", "1",
-        "-vf", "scale=360:-2",
-        "-q:v", "4",
-        thumb_path,
-    ]
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
-        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
-            return thumb_path
-    except Exception as e:
-        logger.warning("Could not extract scene thumbnail for %s at %.2fs: %s", rel_path, float(timestamp or
-        0.0), e)
-    return None
+    return _pipeline.extract_scene_thumbnail(video_path, rel_path, scene_index, timestamp)
 def build_scene_timeline(rel_path, force=False, threshold=0.35, max_scenes=32, min_gap=6.0):
-    if rel_path not in tags:
-        raise FileNotFoundError("File not found in index")
-    meta = metadata_store.setdefault(rel_path, {})
-    existing = meta.get("scene_timeline")
-    if existing and isinstance(existing, dict) and existing.get("scenes") and not force:
-        return existing
-    abs_path = find_existing_file(rel_path)
-    if not abs_path or not os.path.exists(abs_path):
-        raise FileNotFoundError("Video file not found on disk")
-    # Clear stale thumbnails before regenerating.
-    if force:
-        delete_scene_thumbnails_for_file(rel_path)
-    scene_times, duration = extract_scene_detection_times(
-        abs_path,
-        threshold=threshold,
-        max_scenes=max_scenes,
-        min_gap=min_gap,
-    )
-    scenes = []
-    for idx, timestamp in enumerate(scene_times, start=1):
-        next_time = scene_times[idx] if idx < len(scene_times) else duration
-        thumb = extract_scene_thumbnail(abs_path, rel_path, idx, timestamp)
-        scenes.append({
-            "index": idx,
-            "time": float(timestamp),
-            "time_human": format_duration(timestamp),
-            "end_time": float(next_time or 0.0),
-            "end_time_human": format_duration(next_time),
-            "duration": max(0.0, float(next_time or 0.0) - float(timestamp or 0.0)) if next_time else 0.0,
-            "duration_human": format_duration(max(0.0, float(next_time or 0.0) - float(timestamp or 0.0))) if
-            next_time else "—",
-            "title": "Opening" if idx == 1 and float(timestamp or 0.0) <= 0.5 else f"Scene {idx}",
-            "thumbnail_url": scene_url_for_file(rel_path, idx) if thumb else f"/thumbs/{thumb_rel_path_for_file(rel_path)}",
-            "thumbnail_file": os.path.basename(thumb) if thumb else "",
-            "source": "scene-detect" if len(scene_times) > 1 else "fallback",
-        })
-    timeline = {
-        "generated_at": now_stamp(),
-        "version": APP_VERSION,
-        "threshold": float(threshold),
-        "min_gap": float(min_gap),
-        "max_scenes": int(max_scenes),
-        "duration": float(duration or 0.0),
-        "duration_human": format_duration(duration),
-        "scene_count": len(scenes),
-        "scenes": scenes,
-    }
-    meta["scene_timeline"] = timeline
-    meta["scene_timeline_generated_at"] = timeline["generated_at"]
-    save_state()
-    logger.info("Scene timeline generated for %s scenes=%d", rel_path, len(scenes))
-    return timeline
+    return _pipeline.build_scene_timeline(rel_path, force=force, threshold=threshold, max_scenes=max_scenes, min_gap=min_gap)
 def cached_scene_timeline(rel_path):
-    meta = metadata_store.get(rel_path, {}) or {}
-    timeline = meta.get("scene_timeline")
-    if isinstance(timeline, dict):
-        return timeline
-    return {
-        "generated_at": "",
-        "version": APP_VERSION,
-        "threshold": 0.35,
-        "min_gap": 6.0,
-        "max_scenes": 32,
-        "duration": float(meta.get("duration") or 0.0),
-        "duration_human": format_duration(meta.get("duration") or 0.0),
-        "scene_count": 0,
-        "scenes": [],
-    }
-# ================= EMBEDDING =================
+    return _pipeline.cached_scene_timeline(rel_path)
 def compute_embedding(images):
-    if not images:
-        raise RuntimeError("No frames available for embedding generation")
-    tensors = torch.cat([preprocess(img).unsqueeze(0) for img in images]).to(device)
-    with torch.no_grad():
-        feats = clip_model.encode_image(tensors)
-    feats = feats / feats.norm(dim=-1, keepdim=True)
-    mean_feat = feats.mean(dim=0)
-    mean_feat = mean_feat / mean_feat.norm()
-    return mean_feat.cpu().numpy().astype("float32")
-# ================= TAGGING =================
+    return _pipeline.compute_embedding(images)
 def fused_tag(video_path, rel_path=None):
-    frame_paths = extract_frames(video_path)
-    if not frame_paths:
-        raise RuntimeError(f"No frames could be extracted from {video_path}")
-    if rel_path:
-        generate_thumbnail(frame_paths, rel_path)
-        generate_preview_gif(frame_paths, rel_path)
-    # ── NudeNet classification ───────────────────────────────────────────────
-    if rel_path:
-        try:
-            ai_signals = run_nudenet_analysis(frame_paths)
-            save_ai_signals(rel_path, ai_signals)
-            if ai_signals:
-                logger.info(
-                    "NudeNet classification for %s => scene_composition=%s presentations=%s",
-                    rel_path,
-                    ai_signals.get("scene_composition"),
-                    ai_signals.get("performer_presentations"),
-                )
-            else:
-                logger.info("NudeNet classification for %s => no detections above threshold", rel_path)
-        except Exception as e:
-            logger.warning("NudeNet analysis failed for %s: %s", rel_path, e)
-    images = []
-    for p in frame_paths:
-        try:
-            images.append(Image.open(p).convert("RGB"))
-        except Exception as e:
-            logger.warning("Failed to load frame %s: %s", p, e)
-    if not images:
-        raise RuntimeError(f"No readable frame images for {video_path}")
-    emb = compute_embedding(images)
-    raw_score_map = {tag: 0.0 for tag in PROMPTS}
-    for img in images:
-        image_tensor = preprocess(img).unsqueeze(0).to(device)
-        with torch.no_grad():
-            image_features = clip_model.encode_image(image_tensor)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            for tag, tokens in text_tokens.items():
-                text_features = clip_model.encode_text(tokens)
-                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-                similarity = (image_features @ text_features.T).squeeze(0)
-                raw_score_map[tag] += float(similarity.mean().item())
-        try:
-            results = yolo_model.predict(img, verbose=False, device="cpu")
-            people_count = 0
-            for r in results:
-                if hasattr(r, "boxes") and r.boxes is not None and r.boxes.cls is not None:
-                    for c in r.boxes.cls:
-                        if int(c) == 0:
-                            people_count += 1
-            if people_count > 0:
-                raw_score_map["Adults"] += min(0.05 * people_count, 0.20)
-            if people_count >= 2:
-                raw_score_map["Gay"] += 0.015
-                raw_score_map["Straight"] += 0.015
-                raw_score_map["Bisexual"] += 0.015
-        except Exception as e:
-            logger.warning("YOLO analysis warning for %s: %s", video_path, e)
-    frame_count = max(len(images), 1)
-    averaged_scores = {tag: (raw_score_map[tag] / frame_count) for tag in raw_score_map}
-    feedback_bias = compute_feedback_bias()
-    weighted_scores = {}
-    for tag in averaged_scores:
-        weighted = averaged_scores[tag] * TAG_WEIGHTS.get(tag, 1.0)
-        weighted += feedback_bias.get(tag, 0.0)
-        weighted_scores[tag] = normalize_score(weighted)
-    duration = get_video_duration_seconds(video_path)
-    is_clip = duration <= 299.0
-    is_movie = duration >= 300.0
-    weighted_scores["Clip"] = 1.0 if is_clip else 0.0
-    weighted_scores["Movie"] = 1.0 if is_movie else 0.0
-    selected = []
-    for tag, score in weighted_scores.items():
-        if tag in ("Clip", "Movie"):
-            continue
-        threshold = TAG_THRESHOLDS.get(tag, 0.22)
-        if score >= threshold:
-            selected.append(tag)
-    if is_clip:
-        selected.append("Clip")
-    elif is_movie:
-        selected.append("Movie")
-    if not selected:
-        selected = ["Clip"]
-    logger.info(
-        "Tagging complete for %s => tags=%s duration=%.2fs clip=%s movie=%s",
-        video_path,
-        selected,
-        duration,
-        is_clip,
-        is_movie,
-    )
-    # Write ai_inferred label rows for every tag the pipeline assigned.
-    if rel_path and selected:
-        try:
-            write_ai_tag_labels(rel_path, selected)
-        except Exception as _lbl_err:
-            logger.warning("Failed to write ai tag labels for %s: %s", rel_path, _lbl_err)
-    return selected, weighted_scores, emb.tolist()
-# ================= FILE LOOKUP =================
+    return _pipeline.fused_tag(video_path, rel_path=rel_path)
 def find_existing_file(rel_path):
-    rel_path = str(rel_path or "").strip()
-    if not rel_path:
-        return None
-    # Absolute paths may appear in older state files or during migrations.
-    if os.path.isabs(rel_path) and os.path.exists(rel_path):
-        return rel_path
-    for root in candidate_storage_roots():
-        try:
-            candidate = safe_abs_path(rel_path, root)
-            if os.path.exists(candidate):
-                return candidate
-        except Exception:
-            pass
-    return None
-# ================= REPROCESS =================
+    return _pipeline.find_existing_file(rel_path)
 def reprocess_file(rel_path):
     global faiss_index, faiss_keys
-    abs_path = find_existing_file(rel_path)
-    if not abs_path:
-        raise FileNotFoundError(rel_path)
-    logger.info("Manual reprocess started for %s", rel_path)
-    t, s, emb = fused_tag(abs_path, rel_path=rel_path)
-    tags[rel_path] = t
-    scores_store[rel_path] = s
-    embeddings_store[rel_path] = emb
-    save_state()
-    faiss_index, faiss_keys = build_faiss_index()
-    logger.info("Manual reprocess finished for %s", rel_path)
-async def reprocess_all_files_job():
-    global bulk_job, faiss_index, faiss_keys
-    if bulk_job["running"]:
-        return
-    paths = sorted(tags.keys())
-    job_id = create_job("reprocess", "Reprocess all indexed files", total=len(paths))
-    bulk_job = {
-        "running": True,
-        "status": "running",
-        "processed": 0,
-        "total": len(paths),
-        "current": "",
-        "started_at": datetime.now().isoformat(timespec="seconds"),
-        "finished_at": "",
-        "errors": 0,
-        "mode": "reprocess_all",
-        "job_id": job_id,
-    }
-    logger.info("Bulk reprocess job started for %d files", len(paths))
-    try:
-        for rel_path in paths:
-            await wait_job_if_paused(job_id)
-            if job_cancel_requested(job_id):
-                bulk_job["status"] = "cancelled"
-                bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
-                finish_job(job_id, "cancelled", "Cancelled by user")
-                logger.warning("Bulk reprocess job cancelled")
-                return
-            bulk_job["current"] = rel_path
-            update_job(job_id, current=rel_path, processed=bulk_job["processed"], errors=bulk_job["errors"],
-            note="Reprocessing file")
-            try:
-                await asyncio.to_thread(reprocess_file, rel_path)
-            except Exception:
-                bulk_job["errors"] += 1
-                logger.exception("Bulk reprocess failed for %s", rel_path)
-            bulk_job["processed"] += 1
-            update_job(job_id, processed=bulk_job["processed"], errors=bulk_job["errors"], current=rel_path)
-        faiss_index, faiss_keys = build_faiss_index()
-        bulk_job["status"] = "complete"
-        bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        finish_job(job_id, "complete", "Reprocess complete")
-        logger.info("Bulk reprocess job completed")
-    except Exception as e:
-        bulk_job["status"] = "failed"
-        bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        finish_job(job_id, "failed", str(e))
-        raise
-    finally:
-        bulk_job["running"] = False
-# ================= MIGRATION =================
-def migrate_library_files():
-    source_root = os.path.abspath(BASE_PATH)
-    target_root = os.path.abspath(get_download_directory())
-    if source_root == target_root:
-        return {
-            "moved": 0,
-            "skipped": 0,
-            "missing": 0,
-            "failed": 0,
-            "details": ["Source and destination are the same; nothing to migrate."]
-        }
-    ensure_directory(target_root)
-    moved = 0
-    skipped = 0
-    missing = 0
-    failed = 0
-    details = []
-    indexed_paths = sorted(tags.keys())
-    for rel_path in indexed_paths:
-        try:
-            src = safe_abs_path(rel_path, source_root)
-            dst = safe_abs_path(rel_path, target_root)
-            if not os.path.exists(src):
-                if os.path.exists(dst):
-                    skipped += 1
-                    details.append(f"Skipped already present in destination: {rel_path}")
-                else:
-                    missing += 1
-                    details.append(f"Missing in source and destination: {rel_path}")
-                continue
-            if os.path.exists(dst):
-                skipped += 1
-                details.append(f"Skipped destination already exists: {rel_path}")
-                continue
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.move(src, dst)
-            moved += 1
-            details.append(f"Moved: {rel_path}")
-            logger.info("Migrated file %s -> %s", src, dst)
-        except Exception as e:
-            failed += 1
-            details.append(f"Failed: {rel_path} ({e})")
-            logger.exception("Migration failed for %s", rel_path)
-    return {
-        "moved": moved,
-        "skipped": skipped,
-        "missing": missing,
-        "failed": failed,
-        "details": details[:200]
-    }
-# ================= FAISS =================
+    faiss_index, faiss_keys = _pipeline.reprocess_file(rel_path)
+    _persist_faiss_index(faiss_index, faiss_keys)
 def build_faiss_index():
-    keys = list(embeddings_store.keys())
-    if not keys:
-        return None, []
-    valid_keys = []
-    vectors = []
-    for key in keys:
-        vec = embeddings_store.get(key)
-        if not isinstance(vec, list) or not vec:
-            continue
-        try:
-            arr = np.array(vec, dtype="float32")
-            valid_keys.append(key)
-            vectors.append(arr)
-        except Exception:
-            logger.warning("Skipping invalid embedding for %s", key)
-    if not vectors:
-        return None, []
-    vecs = np.vstack(vectors).astype("float32")
-    index = faiss.IndexFlatIP(vecs.shape[1])
-    index.add(vecs)
-    n = len(valid_keys)
-    logger.info("FAISS index rebuilt with %d vectors", n)
-    if n > 5000:
-        logger.warning(
-            "FAISS index holds %d vectors — rebuild time may be noticeable on restart. "
-            "Consider enabling FAISS disk persistence (P2 roadmap item) to skip the rebuild.",
-            n,
-        )
-    return index, valid_keys
-_n_embeddings = len(embeddings_store)
-if _n_embeddings > 0:
-    logger.info("Building FAISS index from %d stored embeddings (in-memory only — rebuilt on every restart)…", _n_embeddings)
-faiss_index, faiss_keys = build_faiss_index()
-# ================= SEARCH =================
+    return _pipeline.build_faiss_index()
+def _persist_faiss_index(index, keys):
+    return _pipeline._persist_faiss_index(index, keys)
+def _invalidate_faiss_cache():
+    return _pipeline._invalidate_faiss_cache()
+def migrate_library_files():
+    return _pipeline.migrate_library_files()
 def search(query, filter_tag=None, min_score=0.0, top_k=250):
-    global faiss_index, faiss_keys
-    if not query or not query.strip():
-        raise RuntimeError("Empty search query")
-    if faiss_index is None or not faiss_keys:
-        return []
-    tokens = clip.tokenize([query]).to(device)
-    with torch.no_grad():
-        q_vec = clip_model.encode_text(tokens)
-        q_vec = q_vec / q_vec.norm(dim=-1, keepdim=True)
-    distances, indices = faiss_index.search(
-        q_vec.cpu().numpy().astype("float32"),
-        min(top_k * 3, len(faiss_keys))
-    )
-    results = []
-    for idx, semantic_score in zip(indices[0], distances[0]):
-        if idx < 0 or idx >= len(faiss_keys):
-            continue
-        path = faiss_keys[idx]
-        file_tags = get_effective_tags(path)
-        if filter_tag and filter_tag not in file_tags:
-            continue
-        if float(semantic_score) < float(min_score):
-            continue
-        tag_scores = scores_store.get(path, {})
-        boost = (sum(tag_scores.values()) / len(tag_scores) if tag_scores else 0.0)
-        final_score = float(semantic_score) * 0.8 + float(boost) * 0.2
-        results.append(
-            {
-                "path": path,
-                "semantic_score": float(semantic_score),
-                "final_score": float(final_score),
-                "tags": file_tags,
-                "score_map": tag_scores,
-                "manual_override": get_manual_override(path) is not None,
-            }
-        )
-    results.sort(key=lambda x: x["final_score"], reverse=True)
-    return results[:top_k]
-# ================= VIDEO SOURCE HELPERS =================
-def message_unique_id(message):
-    peer = getattr(message, "peer_id", None)
-    try:
-        peer_key = str(utils.get_peer_id(peer)) if peer is not None else "unknown"
-    except Exception:
-        peer_key = str(getattr(message, "chat_id", None) or "unknown")
-    return f"{peer_key}:{message.id}"
-def is_message_already_seen(message):
-    return message.id in state_ids or message_unique_id(message) in state_ids
-def mark_message_seen(message):
-    state_ids.add(message_unique_id(message))
-async def resolve_video_source(ref):
-    ref = str(ref or "").strip()
-    if not ref or ref.lower() in {"me", "saved", "saved messages", "self"}:
-        return await client.get_entity("me")
-    # Accept numeric peer IDs as well as @usernames, channel links, and names Telethon can resolve.
-    try:
-        if re.fullmatch(r"-?\d+", ref):
-            return await client.get_entity(int(ref))
-    except Exception:
-        pass
-    return await client.get_entity(ref)
-async def list_dialog_sources(limit=250):
-    dialogs = [{
-        "id": "me",
-        "ref": "me",
-        "title": "Saved Messages",
-        "username": None,
-        "kind": "saved",
-    }]
-    seen_refs = {"me"}
-    async for dialog in client.iter_dialogs(limit=limit):
-        entity = dialog.entity
-        try:
-            peer_id = utils.get_peer_id(entity)
-        except Exception:
-            peer_id = getattr(entity, "id", None)
-        username = getattr(entity, "username", None)
-        title = dialog.name or username or str(peer_id)
-        ref = f"@{username}" if username else str(peer_id)
-        if ref.lower() in seen_refs:
-            continue
-        seen_refs.add(ref.lower())
-        kind = "chat"
-        if getattr(dialog, "is_channel", False):
-            kind = "channel"
-        elif getattr(dialog, "is_group", False):
-            kind = "group"
-        elif getattr(dialog, "is_user", False):
-            kind = "user"
-        dialogs.append({
-            "id": str(peer_id),
-            "ref": ref,
-            "title": title,
-            "username": username,
-            "kind": kind,
-        })
-    dialogs.sort(key=lambda x: (x.get("kind", ""), x.get("title", "").lower()))
-    return dialogs
-async def configured_source_peer_ids():
-    peer_ids = set()
-    for ref in enabled_video_sources():
-        try:
-            entity = await resolve_video_source(ref)
-            peer_ids.add(str(utils.get_peer_id(entity)))
-        except Exception as e:
-            logger.warning("Could not resolve configured source %s: %s", ref, e)
-    return peer_ids
-async def event_source_is_enabled(event):
-    peer = getattr(event.message, "peer_id", None)
-    try:
-        event_peer_id = str(utils.get_peer_id(peer))
-    except Exception:
-        event_peer_id = str(getattr(event.message, "chat_id", ""))
-    peer_ids = await configured_source_peer_ids()
-    return event_peer_id in peer_ids
-async def entity_title(entity, fallback):
-    if str(fallback).lower() in {"me", "saved", "saved messages", "self"}:
-        return "Saved Messages"
-    return (
-        getattr(entity, "title", None) or " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name",
-        None)])).strip() or getattr(entity, "username", None)
-        or str(fallback)
-    )
-def iso_or_blank(value):
-    try:
-        if value:
-            return value.isoformat(timespec="seconds")
-    except TypeError:
-        try:
-            return value.isoformat()
-        except Exception:
-            return ""
-    except Exception:
-        return ""
-    return ""
-def entity_identity(entity):
-    if not entity:
-        return {}
-    try:
-        entity_id = utils.get_peer_id(entity)
-    except Exception:
-        entity_id = getattr(entity, "id", "")
-    title = (
-        getattr(entity, "title", None) or " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name",
-        None)])).strip() or getattr(entity, "username", None)
-        or str(entity_id or "")
-    )
-    return {
-        "id": str(entity_id or ""),
-        "raw_id": str(getattr(entity, "id", "") or ""),
-        "title": title,
-        "username": getattr(entity, "username", None) or "",
-        "first_name": getattr(entity, "first_name", None) or "",
-        "last_name": getattr(entity, "last_name", None) or "",
-        "bot": bool(getattr(entity, "bot", False)),
-        "verified": bool(getattr(entity, "verified", False)),
-        "scam": bool(getattr(entity, "scam", False)),
-        "fake": bool(getattr(entity, "fake", False)),
-    }
-def telegram_message_link(source_ref, chat_entity, message_id):
-    try:
-        username = getattr(chat_entity, "username", None) or ""
-        if username and message_id:
-            return f"https://t.me/{username}/{message_id}"
-    except Exception:
-        pass
-    try:
-        peer_id = str(utils.get_peer_id(chat_entity))
-        if peer_id.startswith("-100") and message_id:
-            return f"https://t.me/c/{peer_id[4:]}/{message_id}"
-    except Exception:
-        pass
-    raw = str(source_ref or "").strip()
-    if raw.startswith("@") and message_id:
-        return f"https://t.me/{raw[1:]}/{message_id}"
-    if raw.startswith("-100") and message_id:
-        return f"https://t.me/c/{raw[4:]}/{message_id}"
-    return ""
-def reaction_value_to_text(reaction):
-    if reaction is None:
-        return ""
-    for attr in ("emoticon", "document_id"):
-        val = getattr(reaction, attr, None)
-        if val:
-            return str(val)
-    return str(reaction)
-def reaction_summary(message):
-    out = []
-    reactions = getattr(message, "reactions", None)
-    results = getattr(reactions, "results", None) or []
-    for item in results:
-        out.append({
-            "reaction": reaction_value_to_text(getattr(item, "reaction", None)),
-            "count": int(getattr(item, "count", 0) or 0),
-            "chosen": bool(getattr(item, "chosen", False)),
-        })
-    return out
-def forward_summary(message):
-    fwd = getattr(message, "fwd_from", None)
-    if not fwd:
-        return {}
-    return {
-        "date": iso_or_blank(getattr(fwd, "date", None)),
-        "from_id": str(getattr(fwd, "from_id", "") or ""),
-        "from_name": getattr(fwd, "from_name", "") or "",
-        "channel_id": str(getattr(fwd, "channel_id", "") or ""),
-        "channel_post": str(getattr(fwd, "channel_post", "") or ""),
-        "post_author": getattr(fwd, "post_author", "") or "",
-        "saved_from_peer": str(getattr(fwd, "saved_from_peer", "") or ""),
-        "saved_from_msg_id": str(getattr(fwd, "saved_from_msg_id", "") or ""),
-    }
-def message_file_summary(message):
-    f = getattr(message, "file", None)
-    doc = getattr(message, "document", None)
-    attrs = []
-    for attr in getattr(doc, "attributes", []) or []:
-        attrs.append({
-            "type": attr.__class__.__name__,
-            "duration": getattr(attr, "duration", None),
-            "w": getattr(attr, "w", None),
-            "h": getattr(attr, "h", None),
-            "file_name": getattr(attr, "file_name", None),
-        })
-    return {
-        "kind": telegram_message_media_kind(message),
-        "name": getattr(f, "name", "") or "",
-        "ext": getattr(f, "ext", "") or "",
-        "mime_type": getattr(f, "mime_type", "") or getattr(doc, "mime_type", "") or "",
-        "size": int(getattr(f, "size", 0) or 0),
-        "duration": getattr(f, "duration", None),
-        "width": getattr(f, "width", None),
-        "height": getattr(f, "height", None),
-        "attributes": attrs,
-    }
-def telegram_metadata_sidecar_rel(rel_path):
-    digest = hashlib.sha1(str(rel_path).encode("utf-8")).hexdigest()[:20]
-    return os.path.join("telegram_metadata", f"{digest}.json")
-def write_telegram_metadata_sidecar(rel_path, payload):
-    try:
-        rel = telegram_metadata_sidecar_rel(rel_path)
-        abs_path = safe_abs_path(rel)
-        ensure_directory(os.path.dirname(abs_path))
-        save_json(abs_path, payload)
-        return rel
-    except Exception as e:
-        logger.warning("Could not write Telegram metadata sidecar for %s: %s", rel_path, e)
-        return ""
+    return _pipeline.search(faiss_index, faiss_keys, query, filter_tag=filter_tag, min_score=min_score, top_k=top_k)
+# ================= VIDEO SOURCE HELPERS / DOWNLOAD / INGEST =================
+# Implementation lives in telesaved/sources.py (AD-6, Tier 2).
+# _bind() is called after pipeline; _bind_client() is called in MAIN after TelegramClient is created.
+_sources._bind({
+    "state_ids":                        state_ids,
+    "state_hashes":                     state_hashes,
+    "tags":                             tags,
+    "scores_store":                     scores_store,
+    "embeddings_store":                 embeddings_store,
+    "metadata_store":                   metadata_store,
+    "save_state":                       save_state,
+    "get_source_profile":               get_source_profile,
+    "source_allows_message":            source_allows_message,
+    "get_download_directory":           get_download_directory,
+    "source_display_name":              source_display_name,
+    "safe_source_subdir":               safe_source_subdir,
+    "ensure_directory":                 ensure_directory,
+    "refresh_storage_download_mode":    refresh_storage_download_mode,
+    "download_control":                 download_control,
+    "create_job":                       create_job,
+    "finish_job":                       finish_job,
+    "update_job":                       update_job,
+    "job_cancel_requested":             job_cancel_requested,
+    "job_pause_requested":              job_pause_requested,
+    "wait_job_if_paused":               wait_job_if_paused,
+    "set_download_status":              set_download_status,
+    "clear_download_status":            clear_download_status,
+    "record_download_history":          record_download_history,
+    "file_hash":                        file_hash,
+    "fused_tag":                        fused_tag,
+    "get_video_duration_seconds":       get_video_duration_seconds,
+    "build_faiss_index":                build_faiss_index,
+    "_persist_faiss_index":             _persist_faiss_index,
+    "apply_auto_rules_to_path":         lambda rel, trigger="ingest": apply_auto_rules_to_path(rel, trigger=trigger),
+    "format_bytes":                     format_bytes,
+    "pct":                              pct,
+    "enabled_video_sources":            enabled_video_sources,
+    "APP_VERSION":                      APP_VERSION,
+    "safe_rel_path":                    safe_rel_path,
+    "safe_abs_path":                    safe_abs_path,
+    "utils":                            utils,
+    "TELEGRAM_METADATA_PATH":           TELEGRAM_METADATA_PATH,
+    "get_source_profiles":              get_source_profiles,
+    "parse_source_limit":               parse_source_limit,
+    "message_matches_source_media_filter": message_matches_source_media_filter,
+    "metadata_source_label":            metadata_source_label,
+    "telegram_message_media_kind":      telegram_message_media_kind,
+    "save_json":                        save_json,
+})
+# sem alias — sources.py owns the semaphore; app.py aliases it so existing
+# callsites continue to work.
+sem = _sources.sem
+# Forwarding aliases — all existing call sites resolve through these names.
+def message_unique_id(message):                             return _sources.message_unique_id(message)
+def is_message_already_seen(message):                       return _sources.is_message_already_seen(message)
+def mark_message_seen(message):                             return _sources.mark_message_seen(message)
+async def resolve_video_source(ref):                        return await _sources.resolve_video_source(ref)
+async def list_dialog_sources(limit=250):                   return await _sources.list_dialog_sources(limit=limit)
+async def configured_source_peer_ids():                     return await _sources.configured_source_peer_ids()
+async def event_source_is_enabled(event):                   return await _sources.event_source_is_enabled(event)
+async def entity_title(entity, fallback):                   return await _sources.entity_title(entity, fallback)
+def iso_or_blank(value):                                    return _sources.iso_or_blank(value)
+def entity_identity(entity):                                return _sources.entity_identity(entity)
+def telegram_message_link(source_ref, chat_entity, message_id): return _sources.telegram_message_link(source_ref, chat_entity, message_id)
+def reaction_value_to_text(reaction):                       return _sources.reaction_value_to_text(reaction)
+def reaction_summary(message):                              return _sources.reaction_summary(message)
+def forward_summary(message):                               return _sources.forward_summary(message)
+def message_file_summary(message):                          return _sources.message_file_summary(message)
+def telegram_metadata_sidecar_rel(rel_path):                return _sources.telegram_metadata_sidecar_rel(rel_path)
+def write_telegram_metadata_sidecar(rel_path, payload):     return _sources.write_telegram_metadata_sidecar(rel_path, payload)
 async def build_telegram_metadata_payload(message, source_ref="", source_title="", source_profile=None):
-    source_profile = source_profile or get_source_profile(source_ref, source_title)
-    chat_entity = None
-    sender_entity = None
-    try:
-        chat_entity = await message.get_chat()
-    except Exception:
-        try:
-            chat_entity = await resolve_video_source(source_ref)
-        except Exception:
-            chat_entity = None
-    if source_profile.get("preserve_sender", True):
-        try:
-            sender_entity = await message.get_sender()
-        except Exception:
-            sender_entity = None
-    text = str(getattr(message, "message", "") or getattr(message, "raw_text", "") or "")
-    reply_to = getattr(message, "reply_to", None)
-    replies = getattr(message, "replies", None)
-    payload = {
-        "schema": "telesaved.telegram_metadata.v1",
-        "captured_at": datetime.now().isoformat(timespec="seconds"),
-        "app_version": APP_VERSION,
-        "source_ref": source_ref,
-        "source_title": source_title or source_profile.get("title") or source_display_name(source_ref),
-        "source_profile": {
-            "destination_subdir": source_profile.get("destination_subdir", ""),
-            "pipeline_mode": source_profile.get("pipeline_mode", "incremental"),
-            "media_filter": source_profile.get("media_filter", "videos"),
-        },
-        "message_id": getattr(message, "id", "") or "",
-        "message_key": message_unique_id(message),
-        "message_date": iso_or_blank(getattr(message, "date", None)),
-        "edit_date": iso_or_blank(getattr(message, "edit_date", None)),
-        "post_author": getattr(message, "post_author", "") or "",
-        "grouped_id": str(getattr(message, "grouped_id", "") or ""),
-        "reply_to_msg_id": str(getattr(reply_to, "reply_to_msg_id", "") or getattr(message, "reply_to_msg_id",
-        "") or ""),
-        "views": int(getattr(message, "views", 0) or 0),
-        "forwards": int(getattr(message, "forwards", 0) or 0),
-        "reply_count": int(getattr(replies, "replies", 0) or 0),
-        "pinned": bool(getattr(message, "pinned", False)),
-        "mentioned": bool(getattr(message, "mentioned", False)),
-        "silent": bool(getattr(message, "silent", False)),
-        "telegram_link": telegram_message_link(source_ref, chat_entity, getattr(message, "id", "")),
-        "chat": entity_identity(chat_entity),
-        "sender": entity_identity(sender_entity) if source_profile.get("preserve_sender", True) else {},
-        "media": message_file_summary(message),
-    }
-    if source_profile.get("preserve_captions", True):
-        payload["caption"] = text
-        payload["caption_length"] = len(text)
-    if source_profile.get("preserve_forwards", True):
-        payload["forward"] = forward_summary(message)
-    if source_profile.get("preserve_replies", True):
-        payload["reply"] = {
-            "reply_to_msg_id": payload.get("reply_to_msg_id", ""),
-            "reply_count": payload.get("reply_count", 0),
-        }
-    if source_profile.get("preserve_reactions", True):
-        payload["reactions"] = reaction_summary(message)
-    return payload
-def apply_source_pipeline_tags(rel_path, source_profile):
-    if not source_profile.get("apply_source_tag", False):
-        return []
-    tag = str(source_profile.get("source_tag") or "").strip()
-    if not tag:
-        tag = f"Source: {source_profile.get('title') or source_profile.get('ref') or 'Telegram'}"
-    tag = tag[:60]
-    current = list(tags.get(rel_path, []))
-    if tag not in current:
-        current.append(tag)
-        tags[rel_path] = current
-    return current
+    return await _sources.build_telegram_metadata_payload(message, source_ref=source_ref, source_title=source_title, source_profile=source_profile)
+def apply_source_pipeline_tags(rel_path, source_profile):   return _sources.apply_source_pipeline_tags(rel_path, source_profile)
 def merge_telegram_metadata_into_item(rel_path, metadata_payload, source_profile):
-    meta = metadata_store.setdefault(rel_path, {})
-    sidecar_rel = write_telegram_metadata_sidecar(rel_path, metadata_payload)
-    sender = metadata_payload.get("sender") or {}
-    forward = metadata_payload.get("forward") or {}
-    caption = metadata_payload.get("caption", "")
-    meta.update({
-        "telegram": metadata_payload,
-        "telegram_metadata_file": sidecar_rel,
-        "telegram_metadata_captured_at": metadata_payload.get("captured_at", ""),
-        "telegram_link": metadata_payload.get("telegram_link", ""),
-        "telegram_chat_id": (metadata_payload.get("chat") or {}).get("id", ""),
-        "telegram_sender_id": sender.get("id", ""),
-        "telegram_sender_name": sender.get("title", ""),
-        "telegram_sender_username": sender.get("username", ""),
-        "telegram_caption": caption,
-        "telegram_caption_preview": caption[:240],
-        "telegram_forward_from": forward.get("from_name") or forward.get("post_author") or forward.get("channel_id") or "",
-        "telegram_reply_to_msg_id": metadata_payload.get("reply_to_msg_id", ""),
-        "telegram_grouped_id": metadata_payload.get("grouped_id", ""),
-        "telegram_views": metadata_payload.get("views", 0),
-        "telegram_forwards": metadata_payload.get("forwards", 0),
-        "telegram_reaction_count": sum(int(x.get("count", 0) or 0) for x in metadata_payload.get("reactions",
-        []) if isinstance(x, dict)),
-        "source_pipeline_version": APP_VERSION,
-    })
-    apply_source_pipeline_tags(rel_path, source_profile)
-    return meta
-def build_source_pipeline_report():
-    profiles = get_source_profiles()
-    rows = []
-    total_metadata = 0
-    for ref, profile in profiles.items():
-        source_items = []
-        for path, meta in metadata_store.items():
-            meta = meta or {}
-            if str(meta.get("source_ref") or "").lower() == str(ref).lower() or str(meta.get("source") or
-            "").lower() == str(profile.get("title") or "").lower():
-                source_items.append((path, meta))
-        with_tg = [x for x in source_items if isinstance(x[1].get("telegram"), dict)]
-        total_metadata += len(with_tg)
-        latest = ""
-        for _, meta in source_items:
-            latest = max(latest, str(meta.get("message_date") or ""))
-        rows.append({
-            "ref": ref,
-            "title": profile.get("title") or source_display_name(ref),
-            "enabled": bool(profile.get("enabled", True)),
-            "sync_enabled": bool(profile.get("sync_enabled", True)),
-            "pipeline_enabled": bool(profile.get("pipeline_enabled", True)),
-            "pipeline_mode": profile.get("pipeline_mode", "incremental"),
-            "media_filter": profile.get("media_filter", "videos"),
-            "max_messages_per_run": profile.get("max_messages_per_run", ""),
-            "lookback_days": profile.get("lookback_days", ""),
-            "videos": len(source_items),
-            "telegram_metadata": len(with_tg),
-            "caption_count": sum(1 for _, meta in with_tg if (meta.get("telegram") or {}).get("caption")),
-            "sender_count": sum(1 for _, meta in with_tg if ((meta.get("telegram") or {}).get("sender") or
-            {}).get("id")),
-            "forward_count": sum(1 for _, meta in with_tg if (meta.get("telegram") or {}).get("forward")),
-            "sidecar_count": sum(1 for _, meta in with_tg if meta.get("telegram_metadata_file")),
-            "latest_message_date": latest,
-            "preservation": {
-                "captions": bool(profile.get("preserve_captions", True)),
-                "sender": bool(profile.get("preserve_sender", True)),
-                "forwards": bool(profile.get("preserve_forwards", True)),
-                "replies": bool(profile.get("preserve_replies", True)),
-                "reactions": bool(profile.get("preserve_reactions", True)),
-            },
-        })
-    rows.sort(key=lambda r: (not r.get("enabled", True), str(r.get("title", "")).lower()))
-    return {
-        "ok": True,
-        "version": APP_VERSION,
-        "summary": {
-            "source_count": len(rows),
-            "pipeline_enabled": sum(1 for r in rows if r.get("pipeline_enabled")),
-            "videos": len(tags),
-            "telegram_metadata": total_metadata,
-            "metadata_directory": TELEGRAM_METADATA_PATH,
-        },
-        "pipelines": rows,
-    }
-def build_telegram_metadata_summary(limit=20):
-    total = len(tags)
-    with_tg = []
-    missing = []
-    with_caption = 0
-    with_sender = 0
-    with_link = 0
-    with_sidecar = 0
-    by_source = {}
-    for path in sorted(tags.keys()):
-        meta = metadata_store.get(path) or {}
-        src = metadata_source_label(meta)
-        row = by_source.setdefault(src, {"source": src, "videos": 0, "telegram_metadata": 0, "missing": 0})
-        row["videos"] += 1
-        tg = meta.get("telegram")
-        if isinstance(tg, dict):
-            with_tg.append(path)
-            row["telegram_metadata"] += 1
-            if tg.get("caption"):
-                with_caption += 1
-            if (tg.get("sender") or {}).get("id"):
-                with_sender += 1
-            if tg.get("telegram_link"):
-                with_link += 1
-            if meta.get("telegram_metadata_file"):
-                with_sidecar += 1
-        else:
-            row["missing"] += 1
-            if len(missing) < int(limit or 20):
-                missing.append({"path": path, "source": src, "message_id": meta.get("message_id", ""),
-                "message_key": meta.get("message_key", "")})
-    source_rows = list(by_source.values())
-    source_rows.sort(key=lambda x: x.get("missing", 0), reverse=True)
-    return {
-        "ok": True,
-        "version": APP_VERSION,
-        "directory": TELEGRAM_METADATA_PATH,
-        "summary": {
-            "videos": total,
-            "with_telegram_metadata": len(with_tg),
-            "missing_telegram_metadata": max(0, total - len(with_tg)),
-            "with_caption": with_caption,
-            "with_sender": with_sender,
-            "with_link": with_link,
-            "with_sidecar": with_sidecar,
-            "coverage_percent": pct(len(with_tg), total),
-        },
-        "by_source": source_rows,
-        "missing_examples": missing,
-    }
+    return _sources.merge_telegram_metadata_into_item(rel_path, metadata_payload, source_profile)
+def build_source_pipeline_report():                         return _sources.build_source_pipeline_report()
+def build_telegram_metadata_summary(limit=20):              return _sources.build_telegram_metadata_summary(limit=limit)
 async def run_source_pipeline_job(job_id, source_ref, options=None):
-    options = options or {}
-    if client is None:
-        finish_job(job_id, "failed", "Telegram is not configured")
-        return
-    try:
-        entity = await resolve_video_source(source_ref)
-        title = await entity_title(entity, source_ref)
-        profile = get_source_profile(source_ref, title)
-        if not profile.get("pipeline_enabled", True):
-            finish_job(job_id, "skipped", "Source pipeline disabled")
-            return
-        max_messages = parse_source_limit(options.get("max_messages") or profile.get("max_messages_per_run"),
-        default=500, maximum=100000)
-        update_job(job_id, total=max_messages, current=title, note="Scanning Telegram source")
-        scanned = 0
-        candidates = 0
-        async for msg in client.iter_messages(entity, limit=max_messages):
-            scanned += 1
-            await wait_job_if_paused(job_id)
-            if job_cancel_requested(job_id):
-                finish_job(job_id, "cancelled", f"Cancelled after {scanned} scanned")
-                return
-            update_job(job_id, processed=scanned, total=max_messages, current=f"{title} message {getattr(msg, 'id', '')}", note=f"Scanned {scanned}; candidates {candidates}")
-            if not message_matches_source_media_filter(msg, profile):
-                continue
-            allowed, _ = source_allows_message(msg, profile)
-            if not allowed:
-                continue
-            candidates += 1
-            await process_message(msg, source_ref=source_ref, source_title=title)
-        finish_job(job_id, "complete", f"Pipeline complete. Scanned {scanned}; video candidates{candidates}.")
-    except Exception as e:
-        logger.exception("Source pipeline failed for %s: %s", source_ref, e)
-        finish_job(job_id, "failed", str(e))
+    return await _sources.run_source_pipeline_job(job_id, source_ref, options=options)
 async def run_telegram_metadata_backfill_job(job_id, limit=500):
-    if client is None:
-        finish_job(job_id, "failed", "Telegram is not configured")
-        return
-    candidates = []
-    for path, meta in metadata_store.items():
-        meta = meta or {}
-        if isinstance(meta.get("telegram"), dict):
-            continue
-        if meta.get("message_id") and (meta.get("source_ref") or meta.get("message_key")):
-            candidates.append((path, meta))
-    if limit:
-        candidates = candidates[: int(limit)]
-    update_job(job_id, total=len(candidates), note="Backfilling Telegram metadata")
-    updated = 0
-    errors = 0
-    skipped = 0
-    entity_cache = {}
-    for idx, (path, meta) in enumerate(candidates, start=1):
-        await wait_job_if_paused(job_id)
-        if job_cancel_requested(job_id):
-            finish_job(job_id, "cancelled", f"Cancelled after {idx-1} items")
-            return
-        update_job(job_id, processed=idx, total=len(candidates), current=path, note=f"Updated {updated}; skipped {skipped}; errors {errors}")
-        source_ref = str(meta.get("source_ref") or "").strip()
-        if not source_ref:
-            key = str(meta.get("message_key") or "")
-            source_ref = key.split(":", 1)[0] if ":" in key else "me"
-        try:
-            if source_ref not in entity_cache:
-                entity_cache[source_ref] = await resolve_video_source(source_ref)
-            entity = entity_cache[source_ref]
-            msg = await client.get_messages(entity, ids=int(meta.get("message_id")))
-            if not msg:
-                skipped += 1
-                continue
-            title = await entity_title(entity, source_ref)
-            profile = get_source_profile(source_ref, title)
-            payload = await build_telegram_metadata_payload(msg, source_ref=source_ref, source_title=title,
-            source_profile=profile)
-            merge_telegram_metadata_into_item(path, payload, profile)
-            updated += 1
-            if updated % 20 == 0:
-                save_state()
-        except Exception as e:
-            errors += 1
-            logger.warning("Telegram metadata backfill failed for %s: %s", path, e)
-    save_state()
-    finish_job(job_id, "complete" if errors == 0 else "complete_with_errors", f"Metadata backfill complete. Updated {updated}; skipped {skipped}; errors {errors}.")
-# ================= DOWNLOAD / INGEST =================
-sem = asyncio.Semaphore(2)
+    return await _sources.run_telegram_metadata_backfill_job(job_id, limit=limit)
 async def process_message(message, source_ref="me", source_title="Saved Messages"):
     global faiss_index, faiss_keys
-    message_key = message_unique_id(message)
-    if is_message_already_seen(message):
-        return
-    source_profile = get_source_profile(source_ref, source_title)
-    allowed, skip_reason = source_allows_message(message, source_profile)
-    if not allowed:
-        logger.info("Skipping message %s from source %s: %s", message.id, source_ref, skip_reason)
-        return
-    job_id = create_job("download", f"Download message {message.id}", total=100, source_ref=source_ref,
-    metadata={"message_key": message_key, "source": source_profile.get("title")})
-    refresh_storage_download_mode()
-    if download_control.get("mode") != "running":
-        logger.info(
-            "Download skipped for message %s because mode=%s reason=%s",
-            message.id,
-            download_control.get("mode"),
-            download_control.get("reason"),
-        )
-        finish_job(job_id, "skipped", download_control.get("reason", "Downloads paused"))
-        return
-    async with sem:
-        refresh_storage_download_mode()
-        if download_control.get("mode") != "running":
-            logger.info(
-                "Download skipped inside worker for message %s because mode=%s reason=%s",
-                message.id,
-                download_control.get("mode"),
-                download_control.get("reason"),
-            )
-            finish_job(job_id, "skipped", download_control.get("reason", "Downloads paused"))
-            return
-        download_root = ensure_directory(get_download_directory())
-        source_subdir = safe_source_subdir(source_profile.get("destination_subdir"))
-        source_root = ensure_directory(os.path.join(download_root, source_subdir)) if source_subdir else download_root
-        folder = os.path.join(source_root, datetime.now().strftime("%Y-%m-%d"))
-        os.makedirs(folder, exist_ok=True)
-        status = {
-            "message_id": message.id,
-            "message_key": message_key,
-            "source": source_profile.get("title") or source_title or source_display_name(source_ref),
-            "source_ref": source_ref,
-            "job_id": job_id,
-            "status": "starting",
-            "filename": None,
-            "path": None,
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "note": f"Preparing download to {folder}"
-        }
-        set_download_status(message.id, status)
-        logger.info("Starting download for message %s into %s", message.id, folder)
-        def progress_callback(current, total):
-            status["status"] = "downloading"
-            status["current"] = int(current)
-            status["total"] = int(total)
-            status["percent"] = pct(current, total)
-            status["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            status["note"] = f"{format_bytes(current)} / {format_bytes(total)}"
-            update_job(job_id, processed=status["percent"], total=100, current=status.get("filename") or
-            f"message {message.id}", note=status["note"])
-            if job_cancel_requested(job_id) or job_pause_requested(job_id):
-                raise RuntimeError("Download cancelled or paused by user")
-        try:
-            refresh_storage_download_mode()
-            if download_control.get("mode") != "running":
-                status["status"] = "paused"
-                status["note"] = download_control.get("reason", "Downloads paused")
-                status["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                record_download_history(dict(status))
-                clear_download_status(message.id)
-                finish_job(job_id, "paused", status["note"])
-                return
-            update_job(job_id, current=f"message {message.id}", note="Starting Telegram download")
-            file_path = await message.download_media(file=folder, progress_callback=progress_callback)
-            if not file_path:
-                status["status"] = "failed"
-                status["note"] = "No file downloaded"
-                record_download_history(dict(status))
-                clear_download_status(message.id)
-                finish_job(job_id, "failed", status["note"])
-                return
-            refresh_storage_download_mode()
-            rel = safe_rel_path(file_path, download_root)
-            status["filename"] = os.path.basename(file_path)
-            status["path"] = rel
-            status["status"] = "processing"
-            status["note"] = "Download complete, analyzing file"
-            status["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            update_job(job_id, processed=100, total=100, current=rel, note="Download complete; analyzing")
-            h = file_hash(file_path)
-            if h in state_hashes:
-                try:
-                    os.remove(file_path)
-                except Exception:
-                    pass
-                mark_message_seen(message)
-                save_state()
-                status["status"] = "duplicate"
-                status["note"] = "Duplicate file removed"
-                record_download_history(dict(status))
-                clear_download_status(message.id)
-                finish_job(job_id, "duplicate", "Duplicate file removed")
-                return
-            try:
-                if source_profile.get("auto_tag", True):
-                    t, s, emb = fused_tag(file_path, rel_path=rel)
-                else:
-                    duration_tmp = get_video_duration_seconds(file_path)
-                    t = ["Movie" if duration_tmp >= 300.0 else "Clip"]
-                    s = {"Clip": 1.0 if duration_tmp < 300.0 else 0.0, "Movie": 1.0 if duration_tmp >= 300.0 else 0.0}
-                    emb = None
-                    logger.info("Auto-tag disabled for source %s; stored basic format tag for %s", source_ref,
-                    rel)
-            except Exception as e:
-                logger.exception("Tagging failed for %s", file_path)
-                t = ["Clip"]
-                s = {"Clip": 1.0, "Movie": 0.0}
-                emb = None
-                status["note"] = f"Tagging fallback used: {e}"
-            tags[rel] = t
-            scores_store[rel] = s
-            if emb is not None:
-                embeddings_store[rel] = emb
-            try:
-                metadata_store[rel] = {
-                    **metadata_store.get(rel, {}),
-                    "source": source_profile.get("title") or source_title or source_display_name(source_ref),
-                    "source_ref": source_ref,
-                    "source_destination_subdir": source_subdir,
-                    "message_id": message.id,
-                    "message_key": message_key,
-                    "message_date": iso_or_blank(getattr(message, "date", None)),
-                    "downloaded_at": datetime.now().isoformat(timespec="seconds"),
-                    "original_filename": os.path.basename(file_path),
-                    "duration": float(get_video_duration_seconds(file_path)),
-                    "size": int(os.path.getsize(file_path)),
-                    "sha256": h,
-                    "modified":
-                    datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat(timespec="seconds"),
-                }
-                if source_profile.get("preserve_telegram_metadata", True):
-                    telegram_payload = await build_telegram_metadata_payload(message, source_ref=source_ref,
-                    source_title=source_title, source_profile=source_profile)
-                    merge_telegram_metadata_into_item(rel, telegram_payload, source_profile)
-            except Exception as e:
-                logger.warning("Could not store metadata for %s: %s", rel, e)
-            try:
-                rule_result = apply_auto_rules_to_path(rel, trigger="ingest")
-                if rule_result.get("changed"):
-                    status["note"] = f"Indexed successfully; {rule_result.get('changed')} rule change(s)applied"
-            except Exception as e:
-                logger.warning("Auto rules failed for %s: %s", rel, e)
-            mark_message_seen(message)
-            state_hashes.add(h)
-            save_state()
-            faiss_index, faiss_keys = build_faiss_index()
-            status["status"] = "complete"
-            status["path"] = rel
-            status["note"] = "Indexed successfully"
-            status["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            finish_job(job_id, "complete", "Indexed successfully")
-        except Exception as e:
-            status["status"] = "failed"
-            status["note"] = str(e)
-            status["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            logger.exception("Download/processing failed for message %s", message.id)
-            finish_job(job_id, "failed", str(e))
-        finally:
-            record_download_history(dict(status))
-            clear_download_status(message.id)
+    result = await _sources.process_message(message, source_ref=source_ref, source_title=source_title)
+    if result is not None:
+        faiss_index, faiss_keys = result
 # ================= TRASH HELPERS =================
 def unique_trash_id(rel_path):
     digest = hashlib.sha1(str(rel_path).encode("utf-8")).hexdigest()[:10]
@@ -4558,6 +2504,7 @@ def soft_delete_indexed_file(rel_path):
     save_feedback()
     save_trash_index()
     faiss_index, faiss_keys = build_faiss_index()
+    _persist_faiss_index(faiss_index, faiss_keys)
     logger.info("Moved indexed file to trash %s video_deleted=%s", rel_path, deleted_video)
     refresh_storage_download_mode()
     return {"path": rel_path, "trash_id": trash_id, "video_deleted": deleted_video, "trashed": True}
@@ -4628,6 +2575,7 @@ def restore_trash_item(trash_id):
     save_feedback()
     save_trash_index()
     faiss_index, faiss_keys = build_faiss_index()
+    _persist_faiss_index(faiss_index, faiss_keys)
     refresh_storage_download_mode()
     logger.info("Restored trash item %s -> %s", trash_id, rel_path)
     return {"trash_id": trash_id, "path": rel_path, "restored": True}
@@ -4743,20 +2691,9 @@ def restore_metadata_backup(path):
         restored_state = load_state_from_sqlite(restored_state or {})
     if not isinstance(restored_state, dict):
         raise ValueError("Backup does not contain a valid state.json or telesaved.db")
-    state.clear()
-    state.update(restored_state)
-    state.setdefault("ids", [])
-    state.setdefault("hashes", [])
-    state.setdefault("tags", {})
-    state.setdefault("scores", {})
-    state.setdefault("embeddings", {})
-    state.setdefault("metadata", {})
-    state_ids.clear(); state_ids.update(state.get("ids", []))
-    state_hashes.clear(); state_hashes.update(state.get("hashes", []))
-    tags.clear(); tags.update(state.get("tags", {}))
-    scores_store.clear(); scores_store.update(state.get("scores", {}))
-    embeddings_store.clear(); embeddings_store.update(state.get("embeddings", {}))
-    metadata_store.clear(); metadata_store.update(state.get("metadata", {}))
+    # Reset the six in-memory globals via state._rebind() so all alias
+    # references held by app.py continue to point to the same objects (AD-1).
+    _state._rebind(restored_state)
     if isinstance(restored_feedback, dict):
         feedback_data.clear()
         feedback_data.update(restored_feedback)
@@ -4786,7 +2723,11 @@ def restore_metadata_backup(path):
     save_settings()
     save_feedback()
     save_trash_index()
+    # Invalidate stale sidecar before rebuild so a restore never loads a
+    # pre-restore cache on the next startup.
+    _invalidate_faiss_cache()
     faiss_index, faiss_keys = build_faiss_index()
+    _persist_faiss_index(faiss_index, faiss_keys)
     refresh_storage_download_mode()
     logger.warning("Restored metadata backup from %s", path)
     return {"restored": True, "safety_backup": safety_backup}
@@ -4950,6 +2891,14 @@ def choose_exact_duplicate_keeper(items):
     return sorted(candidates, key=sort_key)[0]
 def delete_all_exact_duplicates(compute_hashes=True, hash_scan_limit=None):
     """Move all byte-for-byte exact duplicate copies to Trash, keeping one per group."""
+    global faiss_index, faiss_keys
+    # Hold job_lock across the full plan→execute cycle so a concurrent sync job
+    # cannot download or move files between the duplicate scan and the delete.
+    with job_lock:
+        return _delete_all_exact_duplicates_locked(compute_hashes, hash_scan_limit)
+
+def _delete_all_exact_duplicates_locked(compute_hashes=True, hash_scan_limit=None):
+    """Inner implementation — must be called with job_lock held."""
     global faiss_index, faiss_keys
     try:
         limit = int(hash_scan_limit if hash_scan_limit is not None else len(tags))
@@ -6862,6 +4811,57 @@ def bulk_update_tags(paths, selected_tags, action="add"):
             logger.exception("Bulk tag update failed for %s", rel_path)
             failed.append({"path": rel_path, "error": str(e)})
     return {"updated": updated, "failed": failed, "action": action, "tags": edit_tags}
+async def reprocess_all_files_job():
+    global bulk_job, faiss_index, faiss_keys
+    if bulk_job["running"]:
+        return
+    paths = sorted(tags.keys())
+    job_id = create_job("reprocess", "Reprocess all indexed files", total=len(paths))
+    bulk_job = {
+        "running": True,
+        "status": "running",
+        "processed": 0,
+        "total": len(paths),
+        "current": "",
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": "",
+        "errors": 0,
+        "mode": "reprocess_all",
+        "job_id": job_id,
+    }
+    logger.info("Bulk reprocess job started for %d files", len(paths))
+    try:
+        for rel_path in paths:
+            await wait_job_if_paused(job_id)
+            if job_cancel_requested(job_id):
+                bulk_job["status"] = "cancelled"
+                bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                finish_job(job_id, "cancelled", "Cancelled by user")
+                logger.warning("Bulk reprocess job cancelled")
+                return
+            bulk_job["current"] = rel_path
+            update_job(job_id, current=rel_path, processed=bulk_job["processed"], errors=bulk_job["errors"],
+            note="Reprocessing file")
+            try:
+                faiss_index, faiss_keys = await asyncio.to_thread(_pipeline.reprocess_file, rel_path)
+            except Exception:
+                bulk_job["errors"] += 1
+                logger.exception("Bulk reprocess failed for %s", rel_path)
+            bulk_job["processed"] += 1
+            update_job(job_id, processed=bulk_job["processed"], errors=bulk_job["errors"], current=rel_path)
+        faiss_index, faiss_keys = build_faiss_index()
+        _persist_faiss_index(faiss_index, faiss_keys)
+        bulk_job["status"] = "complete"
+        bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        finish_job(job_id, "complete", "Reprocess complete")
+        logger.info("Bulk reprocess job completed")
+    except Exception as e:
+        bulk_job["status"] = "failed"
+        bulk_job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        finish_job(job_id, "failed", str(e))
+        raise
+    finally:
+        bulk_job["running"] = False
 async def reprocess_selected_files_job(paths):
     global bulk_job, faiss_index, faiss_keys
     if bulk_job.get("running"):
@@ -6886,13 +4886,14 @@ async def reprocess_selected_files_job(paths):
                 break
             bulk_job["current"] = rel_path
             try:
-                await asyncio.to_thread(reprocess_file, rel_path)
+                faiss_index, faiss_keys = await asyncio.to_thread(_pipeline.reprocess_file, rel_path)
             except Exception:
                 bulk_job["errors"] += 1
                 logger.exception("Selected reprocess failed for %s", rel_path)
             bulk_job["processed"] += 1
         if bulk_job.get("status") != "cancelled":
             faiss_index, faiss_keys = build_faiss_index()
+            _persist_faiss_index(faiss_index, faiss_keys)
             bulk_job["status"] = "complete"
     finally:
         bulk_job["running"] = False
@@ -7086,6 +5087,7 @@ def sweep_missing_index_entries(mode="manual"):
             save_state()
             save_feedback()
             faiss_index, faiss_keys = build_faiss_index()
+            _persist_faiss_index(faiss_index, faiss_keys)
         finished = datetime.now().isoformat(timespec="seconds")
         index_sweep_status.update({
             "running": False,
@@ -7231,6 +5233,7 @@ def rename_indexed_file(rel_path, requested_name):
     save_state()
     save_feedback()
     faiss_index, faiss_keys = build_faiss_index()
+    _persist_faiss_index(faiss_index, faiss_keys)
     logger.info("Renamed indexed file %s -> %s", rel_path, new_rel_path)
     return {"old_path": rel_path, "new_path": new_rel_path, "renamed": True}
 # ================= WATCH / PLAYBACK HELPERS =================
@@ -7512,8 +5515,8 @@ _serializers._bind(
     preview_rel_path_for_file=preview_rel_path_for_file,
     frame_preview_urls_for_file=frame_preview_urls_for_file,
     cached_scene_timeline=cached_scene_timeline,
-    audio_payload_for_path=audio_payload_for_path,
-    score_rows_fn=score_rows,
+    audio_payload_for_path=lambda rel_path: audio_payload_for_path(rel_path),
+    score_rows_fn=lambda score_map: score_rows(score_map),
     short_name=short_name,
     human_date_from_path=human_date_from_path,
     format_bytes=format_bytes,
@@ -7795,6 +5798,8 @@ async def api_auth_user_create(request):
             groups=data.get("groups") or ["Users"],
             disabled=bool(data.get("disabled", False)),
         )
+        _actor = (auth_current_user(request) or {}).get("username") or "system"
+        append_audit_log(_actor, "user.create", f"Created user {user.get('username', '')}")
         return web.json_response({"ok": True, "user": user})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=400)
@@ -7827,6 +5832,8 @@ async def api_auth_user_update(request):
         user["password_hash"] = digest
     user["updated_at"] = now_stamp()
     save_auth_data()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "user.update", f"Updated user {user_id}")
     return web.json_response({"ok": True, "user": sanitized_user(user_id, user)})
 @routes.delete("/api/auth/users/{user_id}")
 async def api_auth_user_delete(request):
@@ -7844,6 +5851,8 @@ async def api_auth_user_delete(request):
     users.pop(user_id, None)
     (auth_data.setdefault("source_access", {}).setdefault("users", {})).pop(user_id, None)
     save_auth_data()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "user.delete", f"Deleted user {user_id}")
     return web.json_response({"ok": True, "deleted": user_id})
 @routes.post("/api/auth/groups")
 async def api_auth_group_create(request):
@@ -7866,6 +5875,8 @@ async def api_auth_group_create(request):
     }
     auth_data.setdefault("source_access", {}).setdefault("groups", {}).setdefault(name, [])
     save_auth_data()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "group.create", f"Created group {name}")
     return web.json_response({"ok": True, "group": groups[name]})
 @routes.put("/api/auth/groups/{group_name}")
 async def api_auth_group_update(request):
@@ -7887,6 +5898,8 @@ async def api_auth_group_update(request):
         group["permissions"] = normalize_permission_list(data.get("permissions") or [])
     group["updated_at"] = now_stamp()
     save_auth_data()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "group.update", f"Updated group {group_name}")
     return web.json_response({"ok": True, "group": group})
 @routes.delete("/api/auth/groups/{group_name}")
 async def api_auth_group_delete(request):
@@ -7904,6 +5917,8 @@ async def api_auth_group_delete(request):
     for user in (auth_data.get("users") or {}).values():
         user["groups"] = [g for g in (user.get("groups") or []) if g != group_name] or ["Users"]
     save_auth_data()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "group.delete", f"Deleted group {group_name}")
     return web.json_response({"ok": True, "deleted": group_name})
 @routes.post("/api/auth/source-access")
 async def api_auth_source_access_update(request):
@@ -7929,14 +5944,19 @@ async def api_auth_source_access_update(request):
         return web.json_response({"ok": False, "error": "target_type must be user or group"}, status=400)
     save_auth_data()
     logger.info("Source ACL updated by %s for %s:%s -> %s", user.get("username"), target_type, target, refs)
+    _actor = (user or {}).get("username") or "system"
+    append_audit_log(_actor, "source_acl.update", f"Updated ACL for {target_type}:{target}")
     return web.json_response({"ok": True, "source_access": access, "target_type": target_type, "target":
     target, "source_refs": refs})
 def setup_status_payload():
+    # Evaluate config live so the wizard correctly reflects state after setup
+    # without requiring a full restart to update the module-level frozen flag.
+    _configured = bool(api_id and api_hash and not CONFIG_MISSING)
     return {
         "ok": True,
         "version": APP_VERSION,
-        "setup_required": not TELEGRAM_CONFIGURED,
-        "telegram_configured": TELEGRAM_CONFIGURED,
+        "setup_required": not _configured,
+        "telegram_configured": _configured,
         "config_file": CONFIG_FILE,
         "config_example_file": CONFIG_EXAMPLE_FILE,
         "config_missing": CONFIG_MISSING,
@@ -8117,10 +6137,13 @@ async def _connectivity_poller():
 
 @routes.get("/api/health")
 async def api_health(request):
+    # Evaluate setup_required live — TELEGRAM_CONFIGURED is frozen at import
+    # time and would return stale True after the wizard completes until restart.
+    _setup_required = not bool(api_id and api_hash and not CONFIG_MISSING)
     return web.json_response({
         "ok": True,
         "version": APP_VERSION,
-        "setup_required": not TELEGRAM_CONFIGURED,
+        "setup_required": _setup_required,
         "connectivity_status": _connectivity_status,
     })
 @routes.get("/api/tags")
@@ -8153,6 +6176,8 @@ async def api_tags_create(request):
     }
     refresh_tag_globals()
     save_settings()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "tag.create", f"Created tag {tag}")
     return web.json_response({"ok": True, "tag": tag, "tags": PREDEFINED_TAGS})
 @routes.post("/api/tags/metadata")
 async def api_tags_metadata_update(request):
@@ -8201,6 +6226,8 @@ async def api_tags_delete(request):
         save_feedback()
     refresh_tag_globals()
     save_settings()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "tag.delete", f"Deleted tag {tag}")
     return web.json_response({"ok": True, "tag": tag, "removed_from": removed_from, "tags": PREDEFINED_TAGS})
 @routes.post("/api/tags/suggest")
 async def api_tags_suggest(request):
@@ -8220,20 +6247,9 @@ async def api_tags_suggest(request):
     if tag.lower() in {t.lower() for t in PREDEFINED_TAGS}:
         return web.json_response({"ok": False, "error": "Tag already exists in vocabulary"}, status=409)
     suggested_by = (user or {}).get("username") or "unknown"
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            # Prevent duplicate pending suggestions for the same tag.
-            existing = conn.execute(
-                "SELECT id FROM tag_suggestions WHERE LOWER(tag)=LOWER(?) AND status='pending'",
-                (tag,),
-            ).fetchone()
-            if existing:
-                return web.json_response({"ok": True, "queued": True, "message": "Suggestion already pending"})
-            conn.execute(
-                "INSERT INTO tag_suggestions (tag, suggested_by, video_path, created_at, status) VALUES (?,?,?,?,?)",
-                (tag, suggested_by, video_path, now_stamp(), "pending"),
-            )
-            conn.commit()
+    already_pending = _state.suggest_tag(tag, suggested_by, video_path)
+    if already_pending:
+        return web.json_response({"ok": True, "queued": True, "message": "Suggestion already pending"})
     logger.info("Tag suggestion submitted: '%s' by %s for %s", tag, suggested_by, video_path)
     return web.json_response({"ok": True, "message": "Suggestion submitted for admin review"})
 
@@ -8241,14 +6257,9 @@ async def api_tags_suggest(request):
 async def api_tags_suggestions_list(request):
     """List pending tag suggestions. Admin only."""
     status_filter = request.query.get("status", "pending")
-    with sqlite_connect() as conn:
-        rows = conn.execute(
-            "SELECT id, tag, suggested_by, video_path, created_at, status FROM tag_suggestions WHERE status=? ORDER BY id DESC",
-            (status_filter,),
-        ).fetchall()
     return web.json_response({
         "ok": True,
-        "suggestions": [dict(r) for r in rows],
+        "suggestions": _state.list_suggestions(status_filter),
     })
 
 @routes.post("/api/tags/suggestions/{suggestion_id}/approve")
@@ -8264,13 +6275,9 @@ async def api_tags_suggestion_approve(request):
         data = await request.json()
     except Exception:
         pass
-    with sqlite_connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM tag_suggestions WHERE id=? AND status='pending'",
-            (suggestion_id,),
-        ).fetchone()
-        if not row:
-            return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
+    row = _state.get_suggestion(suggestion_id)
+    if not row:
+        return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
     approved_tag = normalize_tag_name(data.get("tag") or row["tag"])
     merge_into = normalize_tag_name(data.get("merge_into") or "")
     final_tag = merge_into if merge_into and merge_into.lower() in {t.lower() for t in PREDEFINED_TAGS} else approved_tag
@@ -8289,13 +6296,7 @@ async def api_tags_suggestion_approve(request):
         except Exception as e:
             logger.warning("Could not write label for approved suggestion: %s", e)
     # Mark suggestion as approved.
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            conn.execute(
-                "UPDATE tag_suggestions SET status='approved' WHERE id=?",
-                (suggestion_id,),
-            )
-            conn.commit()
+    _state.set_suggestion_status(suggestion_id, "approved")
     logger.info("Tag suggestion #%d approved: '%s' → '%s'", suggestion_id, row["tag"], final_tag)
     return web.json_response({"ok": True, "tag": final_tag, "tags": PREDEFINED_TAGS})
 
@@ -8306,15 +6307,9 @@ async def api_tags_suggestion_reject(request):
         suggestion_id = int(request.match_info["suggestion_id"])
     except (ValueError, KeyError):
         return web.json_response({"ok": False, "error": "Invalid suggestion id"}, status=400)
-    with sqlite_lock:
-        with sqlite_connect() as conn:
-            result = conn.execute(
-                "UPDATE tag_suggestions SET status='rejected' WHERE id=? AND status='pending'",
-                (suggestion_id,),
-            )
-            conn.commit()
-            if result.rowcount == 0:
-                return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
+    rowcount = _state.set_suggestion_status(suggestion_id, "rejected")
+    if rowcount == 0:
+        return web.json_response({"ok": False, "error": "Suggestion not found or already actioned"}, status=404)
     return web.json_response({"ok": True})
 
 @routes.post("/api/tags/migrate-labels")
@@ -8356,22 +6351,13 @@ async def api_tags_labels_export(request):
     """Export all video_tag_labels rows, optionally filtered by label_source.
     Used for training data export.
     """
-    label_source_filter = request.query.get("label_source")
+    label_source_filter = request.query.get("label_source") or None
     try:
-        with sqlite_connect() as conn:
-            if label_source_filter:
-                rows = conn.execute(
-                    "SELECT path, tag, label_source, created_at FROM video_tag_labels WHERE label_source=? ORDER BY path, tag",
-                    (label_source_filter,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT path, tag, label_source, created_at FROM video_tag_labels ORDER BY path, tag"
-                ).fetchall()
+        rows = _state.export_tag_labels(label_source_filter)
         return web.json_response({
             "ok": True,
             "count": len(rows),
-            "labels": [dict(r) for r in rows],
+            "labels": rows,
         })
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
@@ -8971,6 +6957,8 @@ async def api_admin_system_post(request):
     if "video_sources" in data:
         settings_data["video_sources"] = normalize_video_sources(data.get("video_sources", []))
     save_settings()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "system.settings", "Updated system settings")
     return web.json_response({"ok": True})
 @routes.get("/api/admin/scoring")
 async def api_admin_scoring_get(request):
@@ -9001,6 +6989,8 @@ async def api_admin_scoring_post(request):
         except (TypeError, ValueError):
             return web.json_response({"ok": False, "error": "nudenet_threshold must be a number"}, status=400)
     save_settings()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "scoring.update", "Updated tag scoring weights")
     return web.json_response({"ok": True})
 @routes.post("/api/admin/scoring/reset")
 async def api_admin_scoring_reset(request):
@@ -9009,6 +6999,8 @@ async def api_admin_scoring_reset(request):
         TAG_THRESHOLDS[tag] = DEFAULT_TAG_THRESHOLDS.get(tag, 0.99)
     settings_data["nudenet_threshold"] = DEFAULT_NUDENET_THRESHOLD
     save_settings()
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "scoring.reset", "Reset scoring to defaults")
     return web.json_response({"ok": True})
 @routes.get("/api/admin/logs")
 async def api_admin_logs(request):
@@ -9046,10 +7038,24 @@ async def api_admin_feedback(request):
     return web.json_response({
         "history": feedback_data.get("history", [])[:100]
     })
+@routes.get("/api/admin/audit-log")
+async def api_admin_audit_log(request):
+    """Return the admin audit log. Requires system.admin permission."""
+    denied = require_permission_response(request, "system.admin")
+    if denied:
+        return denied
+    try:
+        limit = max(1, min(int(request.query.get("limit", "200") or "200"), 1000))
+    except Exception:
+        limit = 200
+    entries = get_audit_log(limit=limit)
+    return web.json_response({"ok": True, "entries": entries, "total": len(entries)})
 @routes.post("/api/admin/reprocess-all")
 async def api_admin_reprocess_all(request):
     if bulk_job["running"]:
         return web.json_response({"ok": False, "error": "A bulk job is already running"}, status=409)
+    _actor = (auth_current_user(request) or {}).get("username") or "system"
+    append_audit_log(_actor, "library.reprocess", "Triggered full library reprocess")
     asyncio.create_task(reprocess_all_files_job())
     return web.json_response({"ok": True})
 @routes.post("/api/admin/migrate-library")
@@ -9374,6 +7380,8 @@ async def api_admin_backups_create(request):
             current="Creating metadata backup",
             metadata={"label": label},
         )
+        _actor = (auth_current_user(request) or {}).get("username") or "system"
+        append_audit_log(_actor, "backup.create", f"Created backup {(info or {}).get('filename', label)}")
         return web.json_response({"ok": True, "backup": info, "job": job, "job_id": job.get("id") if job else
         ""})
     except Exception as e:
@@ -9416,6 +7424,8 @@ async def api_admin_backups_restore(request):
                 return web.json_response({"ok": False, "error": "Invalid backup filename"}, status=400)
             tmp_path = safe_join(BACKUP_PATH, filename)
         result = await asyncio.to_thread(restore_metadata_backup, tmp_path)
+        _actor = (auth_current_user(request) or {}).get("username") or "system"
+        append_audit_log(_actor, "backup.restore", "Restored backup")
         return web.json_response({"ok": True, "result": result})
     except Exception as e:
         logger.exception("Backup restore failed")
@@ -10261,6 +8271,7 @@ async def serve_spa_fallback(request):
     return web.FileResponse(INDEX_FILE)
 # ================= TELEGRAM =================
 client = TelegramClient(SESSION_FILE, api_id, api_hash) if TELEGRAM_CONFIGURED else None
+_sources._bind_client(client)
 if client is not None:
     @client.on(events.NewMessage())
     async def handler(event):

@@ -4,7 +4,7 @@ TeleSaved AI is a self-hosted Telegram video archiving, indexing, tagging, revie
 
 It downloads videos from selected Telegram sources, stores them in a local vault, generates thumbnails and previews, applies AI-assisted classification and tagging, supports semantic and granular search, and provides administrative tools for source management, cleanup, duplicates, transcripts, backups, user access control, and library maintenance.
 
-Current source version: **4.5.8 — Tier 2 Modular Refactor + Backlog Sweep**.
+Current source version: **4.5.15 — Tier 2 Modular Refactor: COMPLETE (auth.py, jobs.py, sources.py extracted)**.
 
 > **Legal notice:** TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user.
 
@@ -51,7 +51,7 @@ chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
 
 # Install on target system
-sudo apt install ./dist/telesaved-ai_4.5.8_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.15_all.deb
 ```
 
 After installation:
@@ -92,7 +92,7 @@ The `base_path` is where TeleSaved stores state, logs, thumbnails, previews, tra
 ```bash
 chmod +x build-telesaved-deb.sh
 ./build-telesaved-deb.sh
-sudo apt install ./dist/telesaved-ai_4.5.8_all.deb
+sudo apt install ./dist/telesaved-ai_4.5.15_all.deb
 ```
 
 The package creates a dedicated non-root `telesaved` system user, installs the Python venv on first install, and registers a systemd service.
@@ -137,4 +137,5 @@ See the [`docs/`](docs/) directory for:
 - [Access Control](docs/ACCESS_CONTROL.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Packaging](docs/PACKAGING.md)
+- [Scaling and Performance](docs/SCALING.md)
 - [Roadmap](docs/ROADMAP.md)

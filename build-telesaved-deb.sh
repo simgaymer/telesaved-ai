@@ -21,8 +21,8 @@ IFS=$'\n\t'
 umask 022
 
 PACKAGE_NAME="telesaved-ai"
-PACKAGE_VERSION="4.5.0"
-APP_VERSION="4.5.0"
+PACKAGE_VERSION="4.5.15"
+APP_VERSION="4.5.15"
 SOURCE_DIR="${SOURCE_DIR:-/opt/telesaved}"
 OUTPUT_DIR="${OUTPUT_DIR:-${SOURCE_DIR}/dist}"
 BUILD_ROOT=""
@@ -565,7 +565,7 @@ REPAIR_HELPER
 write_maintainer_scripts() {
     local package_root="$BUILD_ROOT/pkg"
 
-    cat > "$package_root/DEBIAN/postinst" <<'POSTINST'
+    cat > "$package_root/DEBIAN/postinst" <<'POSTINST_BODY'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -605,11 +605,14 @@ systemctl enable telesaved.service >/dev/null
 systemctl restart telesaved.service
 trap - ERR
 
-printf '\nTeleSaved AI 4.5.0 installed.\n'
+POSTINST_BODY
+    # Append version banner — interpolated in builder shell so PACKAGE_VERSION expands.
+    echo "printf '\\nTeleSaved AI ${PACKAGE_VERSION} installed.\\n'" >> "$package_root/DEBIAN/postinst"
+    cat >> "$package_root/DEBIAN/postinst" <<'POSTINST_TAIL'
 printf 'Web interface: http://SERVER-IP:8080\n'
 printf 'Telegram login: sudo telesaved-telegram-login\n'
 printf 'Dependency repair: sudo telesaved-repair-dependencies\n'
-POSTINST
+POSTINST_TAIL
 
     cat > "$package_root/DEBIAN/prerm" <<'PRERM'
 #!/usr/bin/env bash
