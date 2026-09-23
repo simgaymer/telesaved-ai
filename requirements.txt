@@ -8,11 +8,11 @@ requests>=2.31
 tqdm>=4.66
 regex>=2023.0
 ftfy>=6.1
-openai-whisper>=20231117
+openai-whisper>=20231117,<20260101
 ldap3>=2.9
 nudenet>=3.4
 # CLIP is not on PyPI — install via git URL:
-git+https://github.com/openai/CLIP.git
+git+https://github.com/openai/CLIP.git@a9b99ef
 # PyTorch: the above packages pull in the default (CUDA) build.
 # For CPU-only systems install PyTorch BEFORE running pip install -r requirements.txt:
 #   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu

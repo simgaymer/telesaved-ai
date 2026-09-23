@@ -896,7 +896,7 @@
       <div className="sidebar">
         <div className="brand">
           <div className="brand-badge">T</div>
-          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.7</div></div>
+          <div><div className="brand-name">TeleSaved AI</div><div className="brand-ver">v4.5.8</div></div>
         </div>
 
         <div className="nav-section">
@@ -928,6 +928,9 @@
 
         <div className="user-block">
           {currentUser && <div className="user-name">Signed in as <strong>{currentUser}</strong></div>}
+          <a className="nav-item" href="https://github.com/simgaymer/telesaved-ai/blob/agent/restore-telesaved-source/CHANGELOG.md" target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--muted)"}}>
+            <span className="ni">📋</span>What's new in v4.5.8
+          </a>
           <button className="nav-item" style={{color:"var(--danger)"}} onClick={onLogout}>
             <span className="ni">🚪</span>Sign Out
           </button>
@@ -2095,7 +2098,19 @@
     return (
       <div style={{padding:24}}>
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🕐 Watch Later</div>
-        {loading && <div style={{color:"var(--muted)"}}>Loading…</div>}
+        {loading && (
+          <div className="video-grid" aria-busy="true" aria-label="Loading…">
+            {Array.from({length: 8}).map((_, i) => (
+              <div key={i} style={{borderRadius:"var(--radius-lg)",background:"var(--panel)",overflow:"hidden",animation:"pulse 1.4s ease-in-out infinite",animationDelay:`${i*0.07}s`}}>
+                <div style={{width:"100%",paddingBottom:"56.25%",background:"var(--panel-2)"}} />
+                <div style={{padding:"10px 12px 12px"}}>
+                  <div style={{height:12,borderRadius:4,background:"var(--panel-2)",marginBottom:8,width:"80%"}} />
+                  <div style={{height:10,borderRadius:4,background:"var(--panel-2)",width:"50%"}} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {!loading && items.length === 0 && (
           <div className="empty">
             <div className="empty-icon">🕐</div>
@@ -2126,7 +2141,19 @@
     return (
       <div style={{padding:24}}>
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>⭐ Personal Library</div>
-        {loading && <div style={{color:"var(--muted)"}}>Loading…</div>}
+        {loading && (
+          <div className="video-grid" aria-busy="true" aria-label="Loading…">
+            {Array.from({length: 8}).map((_, i) => (
+              <div key={i} style={{borderRadius:"var(--radius-lg)",background:"var(--panel)",overflow:"hidden",animation:"pulse 1.4s ease-in-out infinite",animationDelay:`${i*0.07}s`}}>
+                <div style={{width:"100%",paddingBottom:"56.25%",background:"var(--panel-2)"}} />
+                <div style={{padding:"10px 12px 12px"}}>
+                  <div style={{height:12,borderRadius:4,background:"var(--panel-2)",marginBottom:8,width:"80%"}} />
+                  <div style={{height:10,borderRadius:4,background:"var(--panel-2)",width:"50%"}} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {!loading && items.length === 0 && (
           <div className="empty">
             <div className="empty-icon">⭐</div>
@@ -2346,8 +2373,11 @@
                 <div style={{fontWeight:500,overflow:"hidden",textOverflow:"ellipsis"}}>{job.name || job.type || job.id}</div>
                 {job.source && <div style={{fontSize:12,color:"var(--muted)"}}>{job.source}</div>}
                 {job.progress != null && (
-                  <div className="progress-track" style={{marginTop:6}}>
-                    <div className="progress-fill" style={{width:`${job.progress}%`}} />
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginTop:6}}>
+                    <div className="progress-track" style={{flex:1}}>
+                      <div className="progress-fill" style={{width:`${job.progress}%`}} />
+                    </div>
+                    <span style={{fontSize:11,color:"var(--muted)",whiteSpace:"nowrap"}}>{Math.round(job.progress)}%</span>
                   </div>
                 )}
               </div>

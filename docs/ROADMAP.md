@@ -19,6 +19,7 @@ Completed bundle roadmap:
 | 4.5.5 | Medium-Priority Gap Fixes |
 | 4.5.6 | Tier 1 Modular Refactor — Serializers extracted |
 | 4.5.7 | Ship-blocker Security + UX Fixes |
+| 4.5.8 | Tier 2 Modular Refactor + Backlog Sweep |
 
 Recommended next priorities:
 

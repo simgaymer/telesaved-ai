@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.5.8 — Tier 2 Modular Refactor + Backlog Sweep
+
+- **`telesaved/audio.py` wired** — `_audio._bind()` added at startup; all 26 functions in the AUDIO INTELLIGENCE HELPERS section replaced with 1-line forwarding aliases. `app.py` shrinks from 11,232 → 10,370 lines (−862 lines of implementation). `_audio._bind()` correctly placed after SERIALIZERS so `serialize_item` is defined before it is passed as a dependency.
+- **`migrate_legacy_tag_labels()` AD-1 fix** — Added optional `tag_map` parameter. Function no longer reads the `tags` global directly; callers (including future `telesaved/state.py`) can pass the dict explicitly. Backwards compatible: defaults to the module-level `tags` global.
+- **`collect_file_metadata()` inline `save_state()` removed** — The inline `save_state()` call that fired on every library sort request for items missing a cached duration has been replaced with an explanatory comment. Duration is written to the in-memory `metadata_store` dict (same net effect) and persisted by the next write-triggered `save_state()` call. Eliminates a full-library SQLite rewrite per missing-duration item on every page load.
+- **`_check_bound()` guard in `telesaved/serializers.py`** — All 9 public serializer functions now call `_check_bound()` on entry. Raises `RuntimeError` with a clear message if `_bind()` has not been called, instead of a confusing `KeyError` deep in the call stack.
+- **`openai-whisper` upper-bound pin** — `requirements.txt` now pins `openai-whisper>=20231117,<20260101` to prevent a future breaking release from silently changing the transcript segment schema.
+- **CLIP pinned to commit SHA** — `git+https://github.com/openai/CLIP.git@a9b99ef` — prevents a HEAD-breaking change from silently entering the install.
+- **WatchLater and Personal pages get skeleton loaders** — Both pages now show the same 8-card pulsing grid skeleton as LibraryPage during load, instead of a plain `Loading…` text string.
+- **Jobs page progress percentage label** — Progress bar now shows `{n}%` label alongside the bar when `job.progress` is not null.
+- **"What's new" changelog link in sidebar** — User block now includes a `📋 What's new in v4.5.8` link pointing to the CHANGELOG on GitHub.
+- `APP_VERSION` → `4.5.8`; sidebar badge, README, ROADMAP, SMOKE_TEST updated.
+
 ## 4.5.7 — Ship-blocker Security + UX Fixes
 
 - **Session cookie `secure=True`** — `make_auth_response()` now sets `secure=True` on the auth session cookie. Previously `secure=False` meant the cookie was transmitted in plaintext on the inner hop of a TLS-terminating reverse proxy. Closes the LAN session-hijacking risk.

@@ -70,6 +70,19 @@ def _bind(
     _deps.pop("__class__", None)
 
 
+def _check_bound() -> None:
+    """Raise RuntimeError if _bind() has not been called yet.
+
+    Guards against importing a serializer function in tests or tools without
+    going through app.py startup, which would produce a confusing KeyError.
+    """
+    if not _deps:
+        raise RuntimeError(
+            "telesaved.serializers has not been initialised — call _bind() first. "
+            "If you are writing a test, call serializers._bind(**mock_deps) in setUp."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -93,6 +106,7 @@ def _meta() -> dict:
 
 def serialize_item(item: dict) -> dict:
     """Serialise a search-result item dict into a full API payload."""
+    _check_bound()
     rel_path = item["path"]
     find = _deps["find_existing_file"]
     abs_path = find(rel_path)
@@ -130,6 +144,7 @@ def serialize_item(item: dict) -> dict:
 
 def score_rows(score_map: dict) -> list:
     """Convert a tag→score dict to a sorted list of display rows."""
+    _check_bound()
     rows = []
     if not isinstance(score_map, dict):
         return rows
@@ -149,6 +164,7 @@ def score_rows(score_map: dict) -> list:
 
 def similar_video_items(rel_path: str, limit: int = 8) -> list:
     """Return visually/semantically similar videos using stored CLIP embeddings."""
+    _check_bound()
     embeddings_store = _emb()
     tags = _tags()
     scores_store = _scores()
@@ -200,6 +216,7 @@ def similar_video_items(rel_path: str, limit: int = 8) -> list:
 
 
 def tag_summary_for_paths(paths: list, max_items: int = 6) -> list:
+    _check_bound()
     get_effective_tags = _deps["get_effective_tags"]
     counts: dict = {}
     for path in paths:
@@ -210,6 +227,7 @@ def tag_summary_for_paths(paths: list, max_items: int = 6) -> list:
 
 
 def source_summary_for_paths(paths: list, max_items: int = 6) -> list:
+    _check_bound()
     metadata_store = _meta()
     metadata_source_label = _deps["metadata_source_label"]
     counts: dict = {}
@@ -221,6 +239,7 @@ def source_summary_for_paths(paths: list, max_items: int = 6) -> list:
 
 
 def cluster_label_from_paths(paths: list) -> str:
+    _check_bound()
     tags_part = tag_summary_for_paths(paths, max_items=3)
     source_part = source_summary_for_paths(paths, max_items=1)
     label_bits = []
@@ -235,6 +254,7 @@ def cluster_label_from_paths(paths: list) -> str:
 
 def normalized_embedding_map(limit: int = 1000) -> list:
     """Return normalised (path, vector) pairs for indexed files that have embeddings."""
+    _check_bound()
     embeddings_store = _emb()
     tags = _tags()
     rows = []
@@ -274,6 +294,7 @@ def build_visual_cluster_report(
     Uses deterministic k-means over normalised CLIP vectors — no scikit-learn
     dependency.
     """
+    _check_bound()
     embeddings_store = _emb()
     tags = _tags()
     scores_store = _scores()
@@ -435,6 +456,7 @@ def build_visual_cluster_report(
 
 def build_item_detail_payload(rel_path: str, include_similar: bool = True) -> dict:
     """Build the full item detail payload for a given library path."""
+    _check_bound()
     tags = _tags()
     scores_store = _scores()
     metadata_store = _meta()
