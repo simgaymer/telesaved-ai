@@ -1,0 +1,5 @@
+# Keep LF line endings so scripts run on Linux/WSL even when checked out by Windows git
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
