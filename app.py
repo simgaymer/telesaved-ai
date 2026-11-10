@@ -12913,7 +12913,10 @@ async def start_client():
     if not await client.is_user_authorized():
         raise RuntimeError(
             "Telegram session not authorized. "
-            "Run manually once: cd /opt/telesaved && python3 app.py"
+            "Log in once with the service stopped: "
+            "sudo systemctl stop telesaved && "
+            "sudo /opt/telesaved/venv/bin/python /opt/telesaved/scripts/telegram-login.py && "
+            "sudo systemctl start telesaved"
         )
 
     await main()
