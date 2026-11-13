@@ -1,6 +1,6 @@
 # User Management, RBAC, and Source ACL
 
-TeleSaved 4.4.x added local users, groups, permissions, source access controls, and LDAP integration.
+TeleSaved supports local users, groups, permissions, source access controls, and LDAP integration. First-run admin account creation is handled by the browser-based setup wizard.
 
 ## Built-in groups
 
@@ -9,6 +9,8 @@ TeleSaved 4.4.x added local users, groups, permissions, source access controls, 
 | Admin | Full system access |
 | Manager | Add/delete content, manage sources, assign/disassign tags, grant source access |
 | Users | View-only access; no Administration access |
+
+Additional groups can be created with custom permission sets.
 
 ## Permission model
 
@@ -21,7 +23,7 @@ Common permissions include:
 - `downloads.view`
 - `content.manage`
 - `content.delete`
-- `tags.manage`
+- `tags.manage` — access to Tag Management panel; submit tag suggestions in Review Studio
 - `sources.manage`
 - `source_acl.manage`
 - `jobs.manage`
@@ -29,13 +31,21 @@ Common permissions include:
 - `system.admin`
 - `*`
 
+## `tags.manage` permission
+
+Users with `tags.manage` can:
+
+- Access the Tag Management panel (Admin and Manager groups have this by default).
+- Submit new tag suggestions from the inline input in Review Studio and item detail pages.
+- Custom groups can be granted or revoked `tags.manage` independently of their other permissions.
+
 ## Source access
 
 Source access can be granted by user or by group. A user can see library items only from sources they are allowed to access unless they have administrative source privileges.
 
 ## Bootstrap
 
-On first launch with no users, TeleSaved prompts for the first local Admin account. Keep at least one local emergency Admin, especially when using LDAP.
+On first launch, the browser-based setup wizard creates the initial Admin account. Keep at least one local emergency Admin account active, especially when using LDAP.
 
 ## LDAP backend
 

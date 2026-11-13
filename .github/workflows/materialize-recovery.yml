@@ -1,0 +1,88 @@
+name: Materialize recovered TeleSaved source
+
+on:
+  push:
+    branches:
+      - agent/restore-telesaved-source
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore and validate files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat .source-recovery/app.py.gz.part-* > /tmp/app.py.gz
+          gzip -dc /tmp/app.py.gz > app.py
+
+          mkdir -p frontend
+          gzip -dc .source-recovery/index.html.gz > frontend/index.html
+
+          gzip -dc .source-recovery/build-telesaved-deb.sh.gz > build-telesaved-deb.sh
+          chmod +x build-telesaved-deb.sh
+
+          git show 5ec48ae5872b65f3f8a892d7526dcd5e1aafd101:LICENSE > LICENSE
+
+          echo "0b5f6202fc2cad21c9c8edd811dd29ae2b8b53aa2a43eb18ec7ca8a4566c17b4  app.py" | sha256sum -c -
+          echo "12fffa46684630af4a14eff14a600ab302c916cae9d117c094a73da6c2415ec0  frontend/index.html" | sha256sum -c -
+          echo "4c377555aaf9e2a6da65bb9464528288243258051e0f11188bca28738881e1fb  build-telesaved-deb.sh" | sha256sum -c -
+
+          python3 -m py_compile app.py
+          bash -n build-telesaved-deb.sh
+          grep -q 'APP_VERSION = "4.4.3"' app.py
+          grep -q 'telesaved-telegram-login' build-telesaved-deb.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          text = text.replace("**Current source release:** `4.4.2`", "**Current source release:** `4.4.3`")
+          text = text.replace("TeleSaved AI 4.4.2", "TeleSaved AI 4.4.3")
+          readme.write_text(text, encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          if "## 4.4.3" not in text:
+              entry = """# Changelog
+
+## 4.4.3 — Packaging and First-Run Reliability
+
+- Restored the backend and frontend application source to the repository.
+- Added non-fatal Telegram authorization startup behavior.
+- Added the corrected Debian 4.4.3-2 package builder and Telegram login helper.
+- Restored the complete AGPL-3.0 license text.
+"""
+              text = text.replace("# Changelog\n", entry, 1)
+          changelog.write_text(text, encoding="utf-8")
+
+          packaging = Path("docs/PACKAGING.md")
+          if packaging.exists():
+              text = packaging.read_text(encoding="utf-8")
+              text = text.replace("4.4.2_amd64", "4.4.3-2_all")
+              text = text.replace("4.4.2", "4.4.3-2")
+              packaging.write_text(text, encoding="utf-8")
+          PY
+
+          rm -rf .source-recovery .github/workflows/materialize-recovery.yml __pycache__
+
+      - name: Commit materialized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Restore TeleSaved application source" || exit 0
+          git push

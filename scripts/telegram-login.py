@@ -17,7 +17,7 @@ from telethon.sync import TelegramClient
 
 APP_DIR = os.environ.get("APP_DIR", "/opt/telesaved")
 CONFIG = os.path.join(APP_DIR, "config.json")
-SESSION_FILE = os.path.join(APP_DIR, "telesaved_session")  # matches app.py line 112
+SESSION_FILE = os.path.join(APP_DIR, "telesaved_session")  # matches SESSION_FILE in app.py
 
 with open(CONFIG, encoding="utf-8") as fh:
     cfg = json.load(fh)

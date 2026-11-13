@@ -1,29 +1,20 @@
 # Source Sync
 
-The repository documentation and deployment scaffolding are initialized. The full runtime source files are:
+The repository contains the full application source. Runtime state, credentials, and media are never committed.
+
+## Source files in this repository
 
 ```text
-/opt/telesaved/app.py
-/opt/telesaved/frontend/index.html
-```
-
-Use `scripts/push-full-source-to-github.sh` from the deployed TeleSaved host to synchronize the live source tree to this repository.
-
-The script intentionally excludes local credentials, sessions, state databases, logs, media, thumbnails, previews, transcripts, backups, and trash.
-
-## Expected source files
-
-```text
-app.py
-frontend/index.html
-build-telesaved-deb.sh
-config.example.json
-requirements.txt
-install-ldap-deps.sh
-systemd/telesaved.service
-scripts/install-telesaved-venv.sh
-scripts/repair-whisper-cli.sh
-docs/*.md
+app.py                            backend (aiohttp monolith)
+frontend/index.html               React SPA
+build-telesaved-deb.sh            Debian package builder
+config.example.json               safe example config (no credentials)
+requirements.txt                  Python dependencies
+install-ldap-deps.sh              LDAP dependency helper
+systemd/telesaved.service         venv-based systemd unit
+scripts/install-telesaved-venv.sh zero-touch venv installer
+scripts/repair-whisper-cli.sh     Whisper repair helper
+docs/*.md                         project documentation
 README.md
 CHANGELOG.md
 SECURITY.md
@@ -31,6 +22,27 @@ NOTICE
 LICENSE
 ```
 
-## Important
+## Files that must never be committed
 
-Never commit `/opt/telesaved/config.json`, Telethon session files, media, runtime state, logs, or authentication data.
+```text
+config.json               Telegram credentials
+*.session                 Telethon session files
+auth.json                 user accounts and sessions
+state.json / jobs.json    runtime queue state
+telesaved.db              SQLite database
+*.db-wal / *.db-shm       SQLite WAL files
+telesaved.log             application log
+whisper.log               Whisper analysis log
+media/                    downloaded video files
+thumbnails/               generated thumbnails
+previews/                 hover preview GIFs
+frames/                   extracted frame images
+transcripts/              audio transcript files
+trash/                    trashed items
+backups/                  metadata backups
+tag_mappings.json         user-edited AI tag mappings (runtime config)
+```
+
+## Working branch
+
+Active development is on `agent/restore-telesaved-source`. Merge to `main` for releases.
