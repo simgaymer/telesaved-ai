@@ -2,7 +2,8 @@
 title: 'pytest harness with auth, RBAC and source-ACL characterization tests'
 type: 'chore'
 created: '2026-11-23'
-status: 'draft'
+status: 'in-progress'
+baseline_commit: 'd6dc2d4dedf1b3bd3a2098efeed3c463e783a972'
 route: 'dispatch'
 review_loop_iteration: 0
 context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
@@ -53,22 +54,36 @@ context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `telesaved/auth.py` -- add `secure=True` to `set_cookie` in `make_auth_response` -- restore the v4.5.7 fix lost in `1df2ce1`.
-- [ ] `CHANGELOG.md` -- note the restored Secure flag and the new test suite under an unreleased heading -- traceability.
-- [ ] `.github/workflows/tests.yml` -- on push/PR to `main`: Python 3.11, `pip install -r requirements-dev.txt`, `pytest -q` -- automatic gate.
-- [ ] `requirements-dev.txt` -- pytest, pytest-aiohttp, aiohttp, telethon, numpy (pinned lower bounds matching `requirements.txt`) -- minimal deps to import `app`.
-- [ ] `pytest.ini` -- `testpaths = tests`, `asyncio_mode = auto` -- single config.
-- [ ] `tests/conftest.py` -- set `TELESAVED_BASE_PATH` to a session tmp dir, stub ML modules, import `app` once; fixtures: `auth_mod` (fresh `_bind` with in-memory load/save), `client` (aiohttp test client on real middlewares+routes, auth state reset per test), `make_user(group)` returning a logged-in token -- shared harness.
-- [ ] `tests/test_auth_unit.py` -- normalization, hashing/verify, group/user permissions, sessions (expiry, eviction cap, disabled user), rate-limit helper, `create_local_user` validation -- module-level coverage.
-- [ ] `tests/test_rbac_http.py` -- I/O matrix rows over HTTP, plus a parametrized table over `required_permission_for_request` for every prefix branch -- route-map regression net.
-- [ ] `tests/test_source_acl.py` -- grants via user and group, `*`, `sources.manage` override, legacy `me` fallback, `/files/` 403 -- ACL coverage.
-- [ ] `README.md` -- short "Running tests" section -- discoverability.
+- [x] `telesaved/auth.py` -- add `secure=True` to `set_cookie` in `make_auth_response` -- restore the v4.5.7 fix lost in `1df2ce1`.
+- [x] `CHANGELOG.md` -- note the restored Secure flag and the new test suite under an unreleased heading -- traceability.
+- [x] `.github/workflows/tests.yml` -- on push/PR to `main`: Python 3.11, `pip install -r requirements-dev.txt`, `pytest -q` -- automatic gate.
+- [x] `requirements-dev.txt` -- pytest, pytest-aiohttp, aiohttp, telethon, numpy (pinned lower bounds matching `requirements.txt`) -- minimal deps to import `app`.
+- [x] `pytest.ini` -- `testpaths = tests`, `asyncio_mode = auto` -- single config.
+- [x] `tests/conftest.py` -- set `TELESAVED_BASE_PATH` to a session tmp dir, stub ML modules, import `app` once; fixtures: `auth_mod` (fresh `_bind` with in-memory load/save), `client` (aiohttp test client on real middlewares+routes, auth state reset per test), `make_user(group)` returning a logged-in token -- shared harness.
+- [x] `tests/test_auth_unit.py` -- normalization, hashing/verify, group/user permissions, sessions (expiry, eviction cap, disabled user), rate-limit helper, `create_local_user` validation -- module-level coverage.
+- [x] `tests/test_rbac_http.py` -- I/O matrix rows over HTTP, plus a parametrized table over `required_permission_for_request` for every prefix branch -- route-map regression net.
+- [x] `tests/test_source_acl.py` -- grants via user and group, `*`, `sources.manage` override, legacy `me` fallback, `/files/` 403 -- ACL coverage.
+- [x] `README.md` -- short "Running tests" section -- discoverability.
 
 **Acceptance Criteria:**
 - Given a clean checkout and `pip install -r requirements-dev.txt`, when `pytest` runs, then all tests pass with no network access and no files written outside the tmp dir.
 - Given someone removes a branch from `required_permission_for_request` or changes a default group's permissions, when `pytest` runs, then at least one test fails naming the route or group.
 
 ## Implementation Notes
+
+- **Pre-existing bug found — local login is broken (HTTP 500).** `app.py:api_auth_login` (~line 5639) reads `_LOGIN_ATTEMPTS`, `_LOGIN_MAX_ATTEMPTS`, `_LOGIN_WINDOW_SECONDS`, but `app.py` never aliases them from `telesaved.auth` (lost in the v4.5.13 extraction, alongside the cookie flag). Every `POST /api/auth/login` with a non-empty username raises `NameError` → 500, so after a session expires or the user logs out nobody can log back in (bootstrap still works). Per **Never** (no production changes beyond the cookie fix) this is *not* fixed here. Handling: `test_rbac_http.py::test_login_route_is_currently_broken` is a strict `xfail` asserting 200 — it XPASSes (fails the suite) once fixed, forcing removal of the marker. The I/O-matrix rows "Login OK" and "Login brute force" are exercised via the `login_route_names` fixture, which monkeypatches the three missing names onto `app` (test-only). Suggested fix: add `_LOGIN_ATTEMPTS = _auth._LOGIN_ATTEMPTS`, `_LOGIN_MAX_ATTEMPTS = _auth._LOGIN_MAX_ATTEMPTS`, `_LOGIN_WINDOW_SECONDS = _auth._LOGIN_WINDOW_SECONDS` to the alias block in `app.py`, then delete the xfail marker and fixture.
+- `make_user` mints sessions with `create_auth_session` rather than HTTP login (consequence of the above).
+- The middleware matrix test runs every `required_permission_for_request` row against a catch-all probe app behind the real `auth_middleware` + `privacy_middleware`, so a 200 means "passed the middleware" without executing production handlers. Real-route tests cover the explicit matrix rows.
+- `conftest.py` hides the repo `config.json` from `app.read_app_config` during import (temporary `os.path.exists` wrapper) and unsets `TELESAVED_API_ID/HASH`, so a developer's local config can't redirect `BASE_PATH` to `/mnt/rda1` or create a Telegram client.
+- Doc/code mismatches recorded (tests follow code):
+  - `SMOKE_TEST.md` 10B.2–10B.3: `GET /api/tags/suggestions`, `/api/tags/labels`, `/api/tags/migrate-labels` map to `system.admin` (Manager cannot list suggestions). However `POST /api/tags/suggestions/{id}/approve|reject` hits the earlier `POST /api/tags/suggest*` branch → `tags.manage`, so a Manager *can* approve/reject if given an id. The spec's Design Notes statement "`/api/tags/suggestions*` maps to `system.admin`" is only true for non-POST.
+  - `SMOKE_TEST.md` 10A.6 says `POST /api/users`; that route does not exist (middleware maps it to `library.view`, then 404). The real route is `POST /api/auth/users`, which the middleware lets through (`/api/auth/` → no permission) and the handler rejects with 403 for Viewer and Manager.
+  - Permission-list row: `normalize_permission_list` and `PUT /api/auth/groups/{name}` keep `[]`; but `POST /api/auth/groups` substitutes `["library.view"]` for an empty list *before* normalizing (all-invalid still → `[]`). Pinned as-is.
+  - `/api/downloads` `GET` falls through to `library.view`; `/api/privacy/*` other than `/status` (including `/unlock`) requires `system.admin` in the RBAC map.
+  - Before bootstrap, non-API paths (`/files/…`) are not gated and source ACL is open (`user_can_access_source` returns True when no users exist).
+  - A custom group with `system.admin` but not `sources.manage` can open any source, while `accessible_source_refs_for_user` (and `/api/auth/status.source_grants`) reports only its real grants.
+- Default `Users` group has no source grants, so a fresh Viewer cannot read legacy (`me`) files until granted.
+- Verified locally on Python 3.11 and 3.13 in clean venvs with only `requirements-dev.txt`: 267 passed, 1 xfailed, ~6–10 s. Mutation checks: removing the `/api/rules` branch fails 4 tests named `…[GET /api/rules]`/`…[POST /api/rules]`; adding `tags.manage` to `Users` fails `test_default_group_permissions_pinned[Users]` plus matrix rows; dropping `secure=True` fails 3 cookie tests.
 
 ## Spec Change Log
 

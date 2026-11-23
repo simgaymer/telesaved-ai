@@ -410,6 +410,7 @@ def make_auth_response(payload, token=None, max_age=None, clear=False):
             token,
             max_age=max_age or AUTH_SESSION_SECONDS,
             httponly=True,
+            secure=True,
             samesite="Lax",
             path="/",
         )

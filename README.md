@@ -123,6 +123,17 @@ The package creates a dedicated non-root `telesaved` system user, installs the P
 
 Models are cached in `$XDG_CACHE_HOME` (defaults to `/home/telesaved/.cache` when running as the `telesaved` system user).
 
+## Running tests
+
+The test suite covers authentication, RBAC and per-source access control. It runs on CPU in a few seconds and does **not** need torch/CLIP/YOLO/NudeNet/Whisper or Telegram: `tests/conftest.py` stubs the ML modules and points `TELESAVED_BASE_PATH` at a throwaway temp dir.
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+CI runs the same command on every push and pull request to `main` (`.github/workflows/tests.yml`).
+
 ## Documentation
 
 See the [`docs/`](docs/) directory for:
