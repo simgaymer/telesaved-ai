@@ -1,0 +1,10 @@
+# Test-only dependencies: enough to import app.py with the ML stack stubbed.
+# Do NOT add torch / CLIP / ultralytics / nudenet / whisper here: tests/conftest.py
+# stubs clip, faiss, torch, PIL and ultralytics in sys.modules, and nudenet and
+# whisper are only imported lazily, never on the tested paths.
+aiohttp>=3.9
+telethon>=1.36
+numpy>=1.26
+pytest>=8.0
+pytest-aiohttp>=1.0
+pytest-asyncio>=0.24  # pytest.ini sets asyncio_default_fixture_loop_scope
