@@ -237,3 +237,22 @@ def test_public_paths_match_middleware(app_module):
 def test_route_permission(app_module, method, path):
     request = make_mocked_request(method, _concrete(path))
     assert app_module.required_permission_for_request(request) == EXPECTED[(method, path)]
+
+
+async def test_every_route_is_reachable(app_module):
+    """aiohttp matches routes in registration order, so a catch-all such as
+    GET /api/item/{path:.*} registered too early swallows /api/item/x/similar.
+    Regression: 4.5.x shipped with transcript.srt/.vtt, /similar and /audio unreachable."""
+    from conftest import build_web_app
+    web_app = build_web_app(app_module)
+    web_app.freeze()
+    wrong = []
+    for route in app_module.routes:
+        path = route.path
+        if path in ("/{tail:.*}",):
+            continue
+        concrete = re.sub(r"\{[^}:]+(:[^}]*)?\}", "x", path)
+        match = await web_app.router.resolve(make_mocked_request(route.method, concrete))
+        if getattr(match, "handler", None) is not route.handler:
+            wrong.append((route.method, path, getattr(match.handler, "__name__", match)))
+    assert not wrong, f"Routes shadowed by an earlier registration: {wrong}"

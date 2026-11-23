@@ -226,3 +226,86 @@ async def test_viewer_cannot_change_source_access(client, make_user, headers):
     resp = await client.post("/api/auth/source-access", headers=headers(viewer),
                              json={"target_type": "user", "target": "vic", "source_refs": ["*"]})
     assert resp.status == 403
+
+
+# ── Listing endpoints filter by source grants ─────────────────────────────────
+# Regression: v4.5.0–4.5.15 /api/library and the AI Librarian returned items from
+# every source, and Collections > items crashed (the filter line had landed in
+# collection_items, which has no request in scope).
+
+@pytest.fixture
+def two_sources(app_module, media, make_user):
+    """srcA/a.mp4 and srcB/secret.mp4 indexed; returns a Viewer token granted srcA only."""
+    paths = [media("srcA/a.mp4", source_ref="srcA"), media("srcB/secret.mp4", source_ref="srcB")]
+    for path in paths:
+        app_module.tags[path] = ["cat"]
+    token = make_user("Users", username="viewer")
+    _grant_user(app_module, "viewer", ["srcA"])
+    yield token
+    for path in paths:
+        app_module.tags.pop(path, None)
+
+
+def _paths(items):
+    return sorted(item.get("path") for item in items)
+
+
+async def test_library_hides_ungranted_sources(client, headers, two_sources):
+    body = await (await client.get("/api/library", headers=headers(two_sources))).json()
+    assert _paths(body["items"]) == ["srcA/a.mp4"]
+    assert body["total_items"] == 1
+
+
+async def test_library_shows_everything_to_admin(client, headers, make_user, two_sources):
+    admin = make_user("Admin", username="boss")
+    body = await (await client.get("/api/library", headers=headers(admin))).json()
+    assert _paths(body["items"]) == ["srcA/a.mp4", "srcB/secret.mp4"]
+
+
+async def test_collection_items_filtered_and_no_longer_500(client, headers, make_user, two_sources, app_module):
+    admin = make_user("Admin", username="boss")
+    created = await (await client.post("/api/collections", json={"name": "all", "q": ""},
+                                       headers=headers(admin))).json()
+    cid = created["collection"]["id"]
+    try:
+        resp = await client.get(f"/api/collections/{cid}/items", headers=headers(admin))
+        assert resp.status == 200
+        assert _paths((await resp.json())["items"]) == ["srcA/a.mp4", "srcB/secret.mp4"]
+        # A Manager with a single-source grant sees only that source (Viewers lack admin.view here).
+        manager = make_user("Manager", username="mgr")
+        app_module.auth_data["groups"]["Manager"]["permissions"] = [
+            p for p in app_module.auth_data["groups"]["Manager"]["permissions"] if p != "sources.manage"]
+        _grant_group(app_module, "Manager", [])
+        _grant_user(app_module, "mgr", ["srcB"])
+        resp = await client.get(f"/api/collections/{cid}/items", headers=headers(manager))
+        assert resp.status == 200
+        assert _paths((await resp.json())["items"]) == ["srcB/secret.mp4"]
+    finally:
+        await client.delete(f"/api/collections/{cid}", headers=headers(admin))
+
+
+async def test_librarian_hides_ungranted_sources(client, headers, two_sources, app_module, monkeypatch):
+    pool = [{"path": "srcA/a.mp4", "tags": ["cat"]}, {"path": "srcB/secret.mp4", "tags": ["cat"]}]
+    monkeypatch.setattr(app_module, "librarian_item_pool", lambda filters: list(pool))
+    resp = await client.post("/api/librarian/ask", json={"prompt": "cats"}, headers=headers(two_sources))
+    body = await resp.json()
+    assert resp.status == 200
+    assert _paths(body["items"]) == ["srcA/a.mp4"]
+    assert body["total_items"] == 1
+
+
+async def test_similar_items_hide_ungranted_sources(client, headers, two_sources, app_module, monkeypatch):
+    similar = [{"path": "srcB/secret.mp4", "tags": ["cat"]}]
+    monkeypatch.setattr(app_module, "similar_video_items", lambda rel_path, limit=8: list(similar))
+    resp = await client.get("/api/item/srcA/a.mp4/similar", headers=headers(two_sources))
+    assert resp.status == 200
+    assert (await resp.json())["items"] == []
+
+
+async def test_item_detail_similar_hides_ungranted_sources(client, headers, two_sources, app_module, monkeypatch):
+    def fake_detail(rel_path, include_similar=True):
+        return {"path": rel_path, "similar": [{"path": "srcB/secret.mp4"}, {"path": "srcA/a.mp4"}]}
+    monkeypatch.setattr(app_module, "build_item_detail_payload", fake_detail)
+    resp = await client.get("/api/item/srcA/a.mp4", headers=headers(two_sources))
+    assert resp.status == 200
+    assert _paths((await resp.json())["similar"]) == ["srcA/a.mp4"]
