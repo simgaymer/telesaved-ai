@@ -32,6 +32,7 @@ except Exception as e:
     def ldap_escape_filter_chars(value):
         return str(value or "")
 import telesaved.auth as _auth
+import telesaved.oidc as _oidc
 import telesaved.jobs as _jobs
 import telesaved.pipeline as _pipeline
 import telesaved.sources as _sources
@@ -753,6 +754,8 @@ _LOGIN_WINDOW_SECONDS  = _auth._LOGIN_WINDOW_SECONDS
 # Forwarding defs — all existing callsites in app.py resolve unchanged.
 def ldap_default_settings():                                    return _auth.ldap_default_settings()
 def identity_default_data():                                    return _auth.identity_default_data()
+def oidc_default_settings():                                    return _auth.oidc_default_settings()
+def oidc_login_available(settings=None):                        return _auth.oidc_login_available(settings)
 def ensure_identity_defaults(data):                             return _auth.ensure_identity_defaults(data)
 def normalize_group_name(value):                                return _auth.normalize_group_name(value)
 def normalize_username(value):                                  return _auth.normalize_username(value)
@@ -771,8 +774,8 @@ def create_auth_session(user_id):                               return _auth.cre
 def auth_token_from_request(request):                           return _auth.auth_token_from_request(request)
 def auth_current_user(request):                                 return _auth.auth_current_user(request)
 def auth_status_payload(request=None):                          return _auth.auth_status_payload(request=request)
-def make_auth_response(payload, token=None, max_age=None, clear=False, request=None):
-    return _auth.make_auth_response(payload, token=token, max_age=max_age, clear=clear, request=request)
+def make_auth_response(payload, token=None, max_age=None, clear=False, request=None, redirect_to=None):
+    return _auth.make_auth_response(payload, token=token, max_age=max_age, clear=clear, request=request, redirect_to=redirect_to)
 def create_local_user(username, password, display_name="", email="", groups=None, disabled=False):
     return _auth.create_local_user(username, password, display_name=display_name, email=email, groups=groups, disabled=disabled)
 def _login_check_and_record_failure(username):  return _auth._login_check_and_record_failure(username)
@@ -806,6 +809,10 @@ def ldap_sanitized_settings(settings=None):
     clean["ldap3_error"] = "" if ldap3 is not None else LDAP3_IMPORT_ERROR
     return clean
 def ldap_normalize_group_mapping(value):
+    return normalize_identity_group_mapping(value)
+def normalize_identity_group_mapping(value):
+    """{external group: [TeleSaved groups]} with unknown TeleSaved groups dropped.
+    Shared by the LDAP and OIDC backends."""
     out = {}
     groups = auth_data.get("groups") or {}
     if not isinstance(value, dict):
@@ -968,9 +975,12 @@ def ldap_group_names_for_user(conn, settings, username, user_dn, user_entry):
             logger.warning("LDAP group search failed for %s: %s", username, e)
     return names, dns
 def ldap_map_groups(ldap_names, ldap_dns, settings):
+    return map_identity_groups(list(ldap_names or []) + list(ldap_dns or []), settings)
+def map_identity_groups(lookup_values, settings):
+    """Map external group names (case-insensitive) through settings["group_mappings"]
+    and always add settings["default_groups"]. Shared by the LDAP and OIDC backends."""
     mapped = []
-    lookup_values = list(ldap_names or []) + list(ldap_dns or [])
-    lookup_lower = {str(v).strip().lower(): str(v).strip() for v in lookup_values if str(v or "").strip()}
+    lookup_lower = {str(v).strip().lower(): str(v).strip() for v in (lookup_values or []) if str(v or "").strip()}
     mappings = settings.get("group_mappings") or {}
     for ldap_key, telesaved_groups in mappings.items():
         key = str(ldap_key or "").strip()
@@ -990,6 +1000,9 @@ def sync_ldap_user(username, user_info, groups):
     existing = users.get(username)
     if existing and existing.get("auth_backend", "local") == "local" and existing.get("password_hash"):
         raise RuntimeError("A local account already exists with this username; rename the LDAP user or local user before enabling LDAP login")
+    if existing and existing.get("auth_backend") == "oidc":
+        # Linked to SSO (spec decision 5): LDAP password login is refused from now on.
+        raise RuntimeError("This account is linked to single sign-on; LDAP login is disabled for it")
     now = now_stamp()
     record = existing or {"created_at": now}
     record.update({
@@ -1096,6 +1109,205 @@ def ldap_test(settings=None, username="", password=""):
                 service.unbind()
         except Exception:
             pass
+# ================= OIDC IDENTITY BACKEND =================
+# Protocol code (discovery, JWKS, state/PKCE, token validation) lives in
+# telesaved/oidc.py; provisioning, group mapping and settings live here,
+# mirroring the LDAP backend above.
+_oidc._bind({})
+OIDCError = _oidc.OIDCError
+OIDC_STR_FIELDS = (
+    "issuer", "client_id", "scopes", "username_claim", "groups_claim",
+    "button_label", "public_base_url", "ca_file",
+)
+OIDC_BOOL_FIELDS = ("enabled", "auto_create_users", "sync_groups_on_login", "link_ldap_accounts")
+def oidc_settings_current():
+    ensure_identity_defaults(auth_data)
+    return auth_data.setdefault("identity", {}).setdefault("oidc", oidc_default_settings())
+def oidc_status_payload(settings=None):
+    settings = settings or oidc_settings_current()
+    return {
+        "enabled": bool(settings.get("enabled")),
+        "configured": bool(str(settings.get("issuer") or "").strip() and str(settings.get("client_id") or "").strip()),
+        "login_available": oidc_login_available(settings),
+        "issuer": str(settings.get("issuer") or ""),
+        "client_secret_set": bool(settings.get("client_secret")),
+        "pyjwt_available": _oidc.pyjwt_available(),
+        "pyjwt_error": _oidc.JWT_IMPORT_ERROR,
+    }
+def oidc_sanitized_settings(settings=None):
+    settings = settings or oidc_settings_current()
+    clean = json.loads(json.dumps(settings))
+    clean["client_secret"] = ""
+    clean["client_secret_set"] = bool(settings.get("client_secret"))
+    return clean
+def oidc_apply_settings(settings, incoming):
+    """Merge incoming fields into settings (in place). client_secret is write-only:
+    empty or "__KEEP__" keeps the stored value unless clear_client_secret is set."""
+    if not isinstance(incoming, dict):
+        raise ValueError("Settings must be a JSON object")
+    for field in OIDC_BOOL_FIELDS:
+        if field in incoming:
+            settings[field] = bool(incoming.get(field))
+    for field in OIDC_STR_FIELDS:
+        if field in incoming:
+            settings[field] = str(incoming.get(field) or "").strip()[:1000]
+    if "issuer" in incoming:
+        settings["issuer"] = settings["issuer"].rstrip("/")
+    if "public_base_url" in incoming:
+        settings["public_base_url"] = settings["public_base_url"].rstrip("/")
+    if "client_secret" in incoming or incoming.get("clear_client_secret"):
+        value = str(incoming.get("client_secret") or "")
+        if value and value != "__KEEP__":
+            settings["client_secret"] = value
+        elif not value and incoming.get("clear_client_secret"):
+            settings["client_secret"] = ""
+    if "default_groups" in incoming:
+        groups = auth_data.get("groups") or {}
+        raw = incoming.get("default_groups") or []
+        if not isinstance(raw, list):
+            raise ValueError("default_groups must be a list")
+        selected = [str(g or "").strip() for g in raw]
+        settings["default_groups"] = [g for g in selected if g in groups] or ["Users"]
+    if "group_mappings" in incoming:
+        if not isinstance(incoming.get("group_mappings") or {}, dict):
+            raise ValueError("group_mappings must be an object")
+        settings["group_mappings"] = normalize_identity_group_mapping(incoming.get("group_mappings") or {})
+    return settings
+def oidc_validate_settings(settings):
+    """Reject at save time what login would reject."""
+    base = str(settings.get("public_base_url") or "")
+    if base and not re.match(r"^https?://[^/\s?#]+(/[^\s?#]*)?$", base):
+        raise ValueError("Public base URL must start with http:// or https://")
+    if settings.get("enabled") and not base:
+        raise ValueError("Public base URL is required when OIDC is enabled (it defines the redirect URI)")
+    issuer = str(settings.get("issuer") or "")
+    if issuer:
+        try:
+            _oidc._require_secure_url(issuer, "Issuer URL")
+        except OIDCError as e:
+            raise ValueError(e.reason)
+    if not str(settings.get("username_claim") or "").strip():
+        settings["username_claim"] = "preferred_username"
+    if not str(settings.get("button_label") or "").strip():
+        settings["button_label"] = "Sign in with SSO"
+    settings["scopes"] = _oidc.normalized_scopes(settings)
+def oidc_update_settings(incoming):
+    current = oidc_settings_current()
+    candidate = oidc_apply_settings(json.loads(json.dumps(current)), incoming)
+    oidc_validate_settings(candidate)
+    current.clear()
+    current.update(candidate)
+    _oidc.clear_caches()
+    save_auth_data()
+    return current
+def oidc_redirect_uri(settings):
+    """public_base_url + callback path; "" when public_base_url is not set.
+    Never derived from request headers (Host / X-Forwarded-Host are client-controlled)."""
+    base = str(settings.get("public_base_url") or "").strip().rstrip("/")
+    return base + "/api/auth/oidc/callback" if base else ""
+def oidc_claim_groups(claims, settings):
+    """Group names from the configured claim. Accepts a list or a single string."""
+    claim = str(settings.get("groups_claim") or "").strip()
+    raw = claims.get(claim) if claim else None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    names = []
+    for value in raw:
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and value not in names:
+            names.append(value)
+    return names
+def oidc_group_lookup_values(names):
+    """Keycloak full-path names: "/admins" also matches a mapping for "admins",
+    but a nested "/other/admins" only matches its full path."""
+    values = list(names)
+    for name in names:
+        short = name[1:] if name.startswith("/") else ""
+        if short and "/" not in short and short not in values:
+            values.append(short)
+    return values
+class OIDCLoginRefused(Exception):
+    def __init__(self, code, reason):
+        super().__init__(reason)
+        self.code = code
+        self.reason = reason
+def sync_oidc_user(username, user_info, groups, settings=None):
+    """Create or update an OIDC-backed user. Modeled on sync_ldap_user, with the
+    account-linking rules of spec decision 5: bound to issuer + sub; LDAP accounts
+    link only with link_ldap_accounts; any other existing account is a conflict.
+    Never re-enables a disabled account."""
+    settings = settings or oidc_settings_current()
+    username = normalize_username(username)
+    if not username:
+        raise OIDCLoginRefused("claims", "ID token has no usable username claim")
+    users = auth_data.setdefault("users", {})
+    existing = users.get(username)
+    issuer = str(user_info.get("issuer") or "")
+    sub = str(user_info.get("sub") or "")
+    if not issuer or not sub:
+        raise OIDCLoginRefused("claims", "ID token has no issuer or subject")
+    if existing:
+        # Account linking (spec decision 5): SSO accounts are bound to issuer + sub.
+        backend = existing.get("auth_backend", "local")
+        if backend == "oidc":
+            if existing.get("oidc_issuer") != issuer or existing.get("oidc_sub") != sub:
+                raise OIDCLoginRefused("conflict", f"Username {username!r} is bound to a different OIDC issuer/subject")
+        elif backend == "ldap":
+            if not bool(settings.get("link_ldap_accounts", False)):
+                raise OIDCLoginRefused("conflict", f"Username {username!r} is an LDAP account and LDAP linking is off")
+        else:
+            raise OIDCLoginRefused("conflict", f"A {backend} account already exists with username {username!r}")
+        if existing.get("disabled"):
+            raise OIDCLoginRefused("disabled", f"Account {username!r} is disabled")
+    if not existing and not bool(settings.get("auto_create_users", True)):
+        raise OIDCLoginRefused("not_provisioned", f"User {username!r} is not provisioned and auto-create is off")
+    if existing and existing.get("auth_backend") == "oidc" and not bool(settings.get("sync_groups_on_login", True)):
+        groups = existing.get("groups") or groups
+    now = now_stamp()
+    record = existing or {"created_at": now, "disabled": False}
+    record.update({
+        "username": username,
+        "display_name": str(user_info.get("display_name") or username).strip()[:120],
+        "email": str(user_info.get("email") or "").strip()[:160],
+        "groups": [g for g in groups if g in (auth_data.get("groups") or {})] or ["Users"],
+        "disabled": bool(record.get("disabled", False)),
+        "auth_backend": "oidc",
+        "oidc_issuer": issuer,
+        "oidc_sub": sub,
+        "oidc_groups": list(user_info.get("oidc_groups") or []),
+        "updated_at": now,
+        "last_login": now,
+    })
+    record.pop("password_salt", None)
+    record.pop("password_hash", None)
+    for key in ("ldap_dn", "ldap_groups", "ldap_group_dns"):
+        record.pop(key, None)
+    users[username] = record
+    auth_data.setdefault("source_access", {}).setdefault("users", {}).setdefault(username, [])
+    save_auth_data()
+    return sanitized_user(username, record)
+def oidc_login_user(claims, settings=None):
+    """Turn validated ID-token claims into a TeleSaved user (create/update)."""
+    settings = settings or oidc_settings_current()
+    claim = str(settings.get("username_claim") or "preferred_username").strip()
+    raw_username = claims.get(claim)
+    if not isinstance(raw_username, str) or not normalize_username(raw_username):
+        raise OIDCLoginRefused("claims", f"ID token has no usable {claim!r} claim")
+    idp_groups = oidc_claim_groups(claims, settings)
+    mapped_groups = map_identity_groups(oidc_group_lookup_values(idp_groups), settings)
+    user_info = {
+        "issuer": claims.get("iss"),
+        "sub": claims.get("sub"),
+        "display_name": claims.get("name") if isinstance(claims.get("name"), str) else raw_username,
+        "email": claims.get("email") if isinstance(claims.get("email"), str) else "",
+        "oidc_groups": idp_groups,
+    }
+    user = sync_oidc_user(raw_username, user_info, mapped_groups, settings)
+    return user, idp_groups, mapped_groups
 def accessible_source_refs_for_user(user):
     if not user:
         return []
@@ -1228,7 +1440,7 @@ def required_permission_for_request(request):
 @web.middleware
 async def auth_middleware(request, handler):
     path = request.path or "/"
-    public_paths = {"/", "/favicon.ico", "/api/health", "/api/setup/status", "/api/setup/validate-telegram", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap"}
+    public_paths = {"/", "/favicon.ico", "/api/health", "/api/setup/status", "/api/setup/validate-telegram", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap", "/api/auth/oidc/login", "/api/auth/oidc/callback"}
     if path in public_paths:
         return await handler(request)
     if not auth_initialized():
@@ -5696,8 +5908,9 @@ async def api_auth_admin_payload(request):
         "can_manage_security": user_has_permission(user, "security.manage"),
         "can_manage_source_acl": user_has_permission(user, "source_acl.manage") or user_has_permission(user,
         "security.manage"),
-        "identity_backends": {"local": True, "ldap": ldap_is_enabled(), "oidc": False, "sso": False},
+        "identity_backends": {"local": True, "ldap": ldap_is_enabled(), "oidc": oidc_login_available(), "sso": oidc_login_available()},
         "ldap": {"settings": ldap_sanitized_settings(), "status": ldap_status_payload()},
+        "oidc": {"settings": oidc_sanitized_settings(), "status": oidc_status_payload()},
     })
 @routes.get("/api/auth/ldap/settings")
 async def api_auth_ldap_settings_get(request):
@@ -5789,6 +6002,125 @@ async def api_auth_ldap_sync_user(request):
                 service.unbind()
         except Exception:
             pass
+@routes.get("/api/auth/oidc/settings")
+async def api_auth_oidc_settings_get(request):
+    denied = require_permission_response(request, "security.manage")
+    if denied:
+        return denied
+    settings = oidc_settings_current()
+    return web.json_response({"ok": True, "settings": oidc_sanitized_settings(settings),
+        "status": oidc_status_payload(settings), "redirect_uri": oidc_redirect_uri(settings),
+        "available_groups": sorted((auth_data.get("groups") or {}).keys())})
+@routes.put("/api/auth/oidc/settings")
+async def api_auth_oidc_settings_put(request):
+    denied = require_permission_response(request, "security.manage")
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return web.json_response({"ok": False, "error": "Settings must be a JSON object"}, status=400)
+    try:
+        settings = oidc_update_settings(data.get("settings") if "settings" in data else data)
+    except ValueError as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=400)
+    logger.info("OIDC settings updated enabled=%s issuer=%s client_id=%s client_secret_set=%s",
+        settings.get("enabled"), settings.get("issuer"), settings.get("client_id"), bool(settings.get("client_secret")))
+    return web.json_response({"ok": True, "settings": oidc_sanitized_settings(settings),
+        "status": oidc_status_payload(settings), "redirect_uri": oidc_redirect_uri(settings),
+        "available_groups": sorted((auth_data.get("groups") or {}).keys())})
+@routes.post("/api/auth/oidc/test")
+async def api_auth_oidc_test(request):
+    denied = require_permission_response(request, "security.manage")
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return web.json_response({"ok": False, "error": "Request must be a JSON object"}, status=400)
+    settings = json.loads(json.dumps(oidc_settings_current()))
+    if "settings" in data:
+        # Test unsaved settings without writing them; the stored secret is kept
+        # unless a new one is supplied (same rule as a save).
+        try:
+            oidc_apply_settings(settings, data.get("settings"))
+        except ValueError as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+    result = await _oidc.test_configuration(settings)
+    result["redirect_uri"] = oidc_redirect_uri(settings)
+    if result.get("ok"):
+        logger.info("OIDC test succeeded issuer=%s jwks_keys=%s", result.get("issuer"), result.get("jwks_keys"))
+    else:
+        logger.warning("OIDC test failed: %s", result.get("error"))
+    return web.json_response({"ok": bool(result.get("ok")), "result": result,
+        "status": oidc_status_payload(settings)}, status=200 if result.get("ok") else 400)
+def oidc_clear_state_cookie(response):
+    response.del_cookie(_oidc.STATE_COOKIE, path=_oidc.STATE_COOKIE_PATH)
+    return response
+def oidc_error_redirect(code):
+    code = re.sub(r"[^a-z0-9_]", "", str(code or "").lower())[:40] or "error"
+    response = web.Response(status=302, headers={"Location": f"/?login_error={code}", "Cache-Control": "no-store"})
+    return oidc_clear_state_cookie(response)
+@routes.get("/api/auth/oidc/login")
+async def api_auth_oidc_login(request):
+    settings = oidc_settings_current()
+    if not settings.get("enabled"):
+        return oidc_error_redirect("oidc_disabled")
+    if not auth_initialized():
+        return oidc_error_redirect("bootstrap")
+    if not oidc_login_available(settings):
+        logger.warning("OIDC login refused: issuer, client ID and public base URL must be configured (and PyJWT installed)")
+        return oidc_error_redirect("config")
+    try:
+        url, state = await _oidc.start_login(settings, oidc_redirect_uri(settings))
+    except OIDCError as e:
+        logger.warning("OIDC login could not start: %s", e.reason)
+        return oidc_error_redirect("config")
+    response = web.Response(status=302, headers={"Location": url, "Cache-Control": "no-store"})
+    # Bind the pending login to this browser (login CSRF): the callback must
+    # present a cookie holding sha256(state).
+    response.set_cookie(
+        _oidc.STATE_COOKIE, _oidc.state_cookie_value(state),
+        max_age=_oidc.STATE_TTL_SECONDS, httponly=True, samesite="Lax",
+        secure=_auth.request_is_https(request), path=_oidc.STATE_COOKIE_PATH,
+    )
+    return response
+@routes.get("/api/auth/oidc/callback")
+async def api_auth_oidc_callback(request):
+    query = request.query
+    pending = _oidc.pop_pending_login(query.get("state"))  # single-use, consumed in every branch
+    if query.get("error"):
+        error = re.sub(r"[^a-z0-9_]", "", str(query.get("error")).lower())[:40] or "idp_error"
+        logger.warning("OIDC login returned an IdP error: %s", error)
+        return oidc_error_redirect(error)
+    settings = oidc_settings_current()
+    if not settings.get("enabled"):
+        return oidc_error_redirect("oidc_disabled")
+    if not pending:
+        logger.warning("OIDC callback with unknown, reused or expired state")
+        return oidc_error_redirect("state")
+    if not _oidc.state_cookie_matches(query.get("state"), request.cookies.get(_oidc.STATE_COOKIE)):
+        logger.warning("OIDC callback state is not bound to this browser (missing or wrong state cookie)")
+        return oidc_error_redirect("state")
+    try:
+        claims = await _oidc.complete_login(settings, query.get("code"), pending, iss_param=query.get("iss"))
+    except OIDCError as e:
+        logger.warning("OIDC login failed (%s): %s", e.code, e.reason)
+        return oidc_error_redirect(e.code)
+    try:
+        user, idp_groups, mapped_groups = oidc_login_user(claims, settings)
+    except OIDCLoginRefused as e:
+        logger.warning("OIDC login refused (%s): %s", e.code, e.reason)
+        return oidc_error_redirect(e.code)
+    token, max_age = create_auth_session(user["id"])
+    logger.info("TeleSaved OIDC login succeeded for username=%s idp_groups=%s mapped_groups=%s",
+        user["id"], idp_groups, mapped_groups)
+    response = make_auth_response({"ok": True}, token=token, max_age=max_age, request=request, redirect_to="/")
+    return oidc_clear_state_cookie(response)
 @routes.post("/api/auth/users")
 async def api_auth_user_create(request):
     denied = require_permission_response(request, "security.manage")

@@ -23,6 +23,7 @@ from aiohttp.test_utils import make_mocked_request
 PUBLIC_API = {
     "/api/health", "/api/setup/status", "/api/setup/validate-telegram",
     "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap",
+    "/api/auth/oidc/login", "/api/auth/oidc/callback",
 }
 
 # Non-API routes: static media (source ACL enforced by each handler) and the SPA shell.
@@ -92,6 +93,12 @@ EXPECTED = {
     ('POST', '/api/auth/ldap/test'): None,
     ('POST', '/api/auth/login'): None,
     ('POST', '/api/auth/logout'): None,
+    # OIDC: login/callback are public; settings/test check security.manage in the handler.
+    ('GET', '/api/auth/oidc/callback'): None,
+    ('GET', '/api/auth/oidc/login'): None,
+    ('GET', '/api/auth/oidc/settings'): None,
+    ('PUT', '/api/auth/oidc/settings'): None,
+    ('POST', '/api/auth/oidc/test'): None,
     ('POST', '/api/auth/source-access'): None,
     ('GET', '/api/auth/status'): None,
     ('POST', '/api/auth/users'): None,

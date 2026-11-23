@@ -15,3 +15,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-auth-test-harness.md`
   summary: Apply the same HTTPS-aware Secure flag to the privacy-lock cookie.
   evidence: app.py privacy cookie is set without Secure.
+- source_spec: `_bmad-output/implementation-artifacts/spec-oidc-login.md`
+  summary: Make the pending-login store flood-resistant (per-client rate limit or stateless signed state).
+  evidence: 1,000-entry FIFO can be filled by unauthenticated requests, failing real users' callbacks with `state`.
+- source_spec: `_bmad-output/implementation-artifacts/spec-oidc-login.md`
+  summary: RP-initiated logout (end_session_endpoint) and revoking OIDC sessions when SSO is disabled or a user is removed at the IdP.
+  evidence: TeleSaved logout leaves the IdP session, so the SSO button signs straight back in; sessions last up to 12 h after IdP-side removal.
+- source_spec: `_bmad-output/implementation-artifacts/spec-oidc-login.md`
+  summary: Add a frontend test harness for the login page and Identity tab.
+  evidence: repo has no JS tests; SSO button, error messages and settings form are verified manually only.

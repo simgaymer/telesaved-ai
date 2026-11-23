@@ -165,11 +165,47 @@ def ldap_default_settings():
     }
 
 
+def oidc_default_settings():
+    return {
+        "enabled": False,
+        "issuer": "",
+        "client_id": "",
+        "client_secret": "",
+        "scopes": "openid profile email groups",
+        "username_claim": "preferred_username",
+        "groups_claim": "groups",
+        "group_mappings": {},
+        "default_groups": ["Users"],
+        "auto_create_users": True,
+        "sync_groups_on_login": True,
+        "link_ldap_accounts": False,
+        "button_label": "Sign in with SSO",
+        "public_base_url": "",
+        "ca_file": "",
+    }
+
+
+def oidc_login_available(settings=None):
+    """True when OIDC is enabled, has the minimum config to start a login, and
+    PyJWT is installed (otherwise the SSO button would only lead to an error)."""
+    from telesaved import oidc as _oidc  # protocol layer; no app.py import (AD-6)
+    if not _oidc.pyjwt_available():
+        return False
+    if settings is None:
+        settings = ((auth_data.get("identity") or {}).get("oidc") or {})
+    return bool(
+        settings.get("enabled")
+        and str(settings.get("issuer") or "").strip()
+        and str(settings.get("client_id") or "").strip()
+        and str(settings.get("public_base_url") or "").strip()
+    )
+
+
 def identity_default_data():
     return {
         "local": {"enabled": True, "emergency_admin": True},
         "ldap": ldap_default_settings(),
-        "oidc": {"enabled": False},
+        "oidc": oidc_default_settings(),
     }
 
 
@@ -180,7 +216,11 @@ def ensure_identity_defaults(data):
     defaults = ldap_default_settings()
     for key, value in defaults.items():
         ldap_settings.setdefault(key, json.loads(json.dumps(value)))
-    identity.setdefault("oidc", {"enabled": False})
+    oidc_settings = identity.get("oidc")
+    if not isinstance(oidc_settings, dict):
+        oidc_settings = identity["oidc"] = {}
+    for key, value in oidc_default_settings().items():
+        oidc_settings.setdefault(key, json.loads(json.dumps(value)))
     return data
 
 
@@ -378,6 +418,9 @@ def auth_current_user(request):
 
 def auth_status_payload(request=None):
     user = auth_current_user(request) if request is not None else None
+    oidc_settings = (auth_data.get("identity") or {}).get("oidc") or {}
+    oidc_on = oidc_login_available(oidc_settings)
+    button_label = str(oidc_settings.get("button_label") or "").strip() or "Sign in with SSO"
     payload = {
         "ok": True,
         "version": _cfg["APP_VERSION"],
@@ -385,8 +428,9 @@ def auth_status_payload(request=None):
         "bootstrap_required": not auth_initialized(),
         "authenticated": bool(user),
         "permissions_catalog": PERMISSION_CATALOG,
-        "identity_backends": {"local": True, "ldap": _cfg["ldap_is_enabled"](), "oidc": False, "sso": False},
+        "identity_backends": {"local": True, "ldap": _cfg["ldap_is_enabled"](), "oidc": oidc_on, "sso": oidc_on},
         "ldap_status": _cfg["ldap_status_payload"](),
+        "oidc": {"enabled": oidc_on, "button_label": button_label},
         "phase": "local-users-groups-source-acl-ldap",
     }
     if user:
@@ -414,11 +458,16 @@ def request_is_https(request):
     return proto == "https"
 
 
-def make_auth_response(payload, token=None, max_age=None, clear=False, request=None):
+def make_auth_response(payload, token=None, max_age=None, clear=False, request=None, redirect_to=None):
     # Secure only over HTTPS: the documented install is plain http://SERVER_IP:8080,
     # where browsers would drop a Secure cookie and lock every user out.
+    # redirect_to turns the response into a 302 (browser flows such as the OIDC
+    # callback) while keeping the same cookie handling.
     web = _cfg["web"]
-    response = web.json_response(payload)
+    if redirect_to:
+        response = web.Response(status=302, headers={"Location": redirect_to, "Cache-Control": "no-store"})
+    else:
+        response = web.json_response(payload)
     if clear:
         response.del_cookie(AUTH_SESSION_COOKIE, path="/")
     elif token:

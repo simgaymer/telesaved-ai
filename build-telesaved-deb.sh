@@ -278,6 +278,7 @@ write_runtime_requirements() {
 aiohttp==3.14.1
 Telethon==1.44.0
 ldap3==2.9.1
+PyJWT[crypto]>=2.8,<3
 Pillow==12.3.0
 numpy==2.4.6
 numba==0.66.0
@@ -381,6 +382,7 @@ import sys
 import aiohttp
 import telethon
 import ldap3
+import jwt
 import torch
 import torchvision
 import clip
@@ -395,6 +397,7 @@ print("Python:", sys.version.replace("\n", " "))
 print("aiohttp:", aiohttp.__version__)
 print("Telethon:", telethon.__version__)
 print("ldap3:", ldap3.__version__)
+print("PyJWT:", jwt.__version__)
 print("torch:", torch.__version__)
 print("torchvision:", torchvision.__version__)
 print("clip:", clip.__file__)
