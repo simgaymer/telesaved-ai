@@ -747,6 +747,9 @@ PERMISSION_CATALOG = _auth.PERMISSION_CATALOG
 DEFAULT_GROUPS     = _auth.DEFAULT_GROUPS
 AUTH_SESSION_COOKIE    = _auth.AUTH_SESSION_COOKIE
 AUTH_SESSION_SECONDS   = _auth.AUTH_SESSION_SECONDS
+_LOGIN_ATTEMPTS        = _auth._LOGIN_ATTEMPTS
+_LOGIN_MAX_ATTEMPTS    = _auth._LOGIN_MAX_ATTEMPTS
+_LOGIN_WINDOW_SECONDS  = _auth._LOGIN_WINDOW_SECONDS
 # Forwarding defs — all existing callsites in app.py resolve unchanged.
 def ldap_default_settings():                                    return _auth.ldap_default_settings()
 def identity_default_data():                                    return _auth.identity_default_data()
@@ -768,8 +771,8 @@ def create_auth_session(user_id):                               return _auth.cre
 def auth_token_from_request(request):                           return _auth.auth_token_from_request(request)
 def auth_current_user(request):                                 return _auth.auth_current_user(request)
 def auth_status_payload(request=None):                          return _auth.auth_status_payload(request=request)
-def make_auth_response(payload, token=None, max_age=None, clear=False):
-    return _auth.make_auth_response(payload, token=token, max_age=max_age, clear=clear)
+def make_auth_response(payload, token=None, max_age=None, clear=False, request=None):
+    return _auth.make_auth_response(payload, token=token, max_age=max_age, clear=clear, request=request)
 def create_local_user(username, password, display_name="", email="", groups=None, disabled=False):
     return _auth.create_local_user(username, password, display_name=display_name, email=email, groups=groups, disabled=disabled)
 def _login_check_and_record_failure(username):  return _auth._login_check_and_record_failure(username)
@@ -5623,7 +5626,7 @@ async def api_auth_bootstrap(request):
         token, max_age = create_auth_session(user["id"])
         logger.info("Initial TeleSaved Admin account created: %s", user.get("username"))
         return make_auth_response({"ok": True, "user": user, **auth_status_payload(request)}, token=token,
-        max_age=max_age)
+        max_age=max_age, request=request)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=400)
 @routes.post("/api/auth/login")
@@ -5648,7 +5651,7 @@ async def api_auth_login(request):
         save_auth_data()
         token, max_age = create_auth_session(username)
         logger.info("TeleSaved local login succeeded for username=%s", username)
-        return make_auth_response({"ok": True, **auth_status_payload(request)}, token=token, max_age=max_age)
+        return make_auth_response({"ok": True, **auth_status_payload(request)}, token=token, max_age=max_age, request=request)
     if ldap_is_enabled():
         try:
             ldap_result = ldap_authenticate(username, password)
@@ -5661,7 +5664,7 @@ async def api_auth_login(request):
                 logger.info("TeleSaved LDAP login succeeded for username=%s mapped_groups=%s", username,
                 ldap_result.get("mapped_groups"))
                 return make_auth_response({"ok": True, **auth_status_payload(request)}, token=token,
-                max_age=max_age)
+                max_age=max_age, request=request)
         except Exception as e:
             logger.warning("TeleSaved LDAP login failed for username=%s: %s", username, e)
     # Record failure (also handles first-failure init via the helper)

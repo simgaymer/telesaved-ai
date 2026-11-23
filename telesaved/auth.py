@@ -399,7 +399,24 @@ def auth_status_payload(request=None):
     return payload
 
 
-def make_auth_response(payload, token=None, max_age=None, clear=False):
+def request_is_https(request):
+    """True when the client reached TeleSaved over HTTPS, directly or via a
+    TLS-terminating reverse proxy that sets X-Forwarded-Proto.
+
+    A spoofed header can only make the client's own cookie stricter, so it is
+    safe to trust here.
+    """
+    if request is None:
+        return False
+    if getattr(request, "secure", False):
+        return True
+    proto = str(request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+    return proto == "https"
+
+
+def make_auth_response(payload, token=None, max_age=None, clear=False, request=None):
+    # Secure only over HTTPS: the documented install is plain http://SERVER_IP:8080,
+    # where browsers would drop a Secure cookie and lock every user out.
     web = _cfg["web"]
     response = web.json_response(payload)
     if clear:
@@ -410,6 +427,7 @@ def make_auth_response(payload, token=None, max_age=None, clear=False):
             token,
             max_age=max_age or AUTH_SESSION_SECONDS,
             httponly=True,
+            secure=request_is_https(request),
             samesite="Lax",
             path="/",
         )

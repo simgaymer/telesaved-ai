@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Auth session cookie is `Secure` over HTTPS** — `telesaved/auth.py:make_auth_response` sets `Secure` on `telesaved_auth_token` when the request arrived over HTTPS, directly or through a TLS-terminating reverse proxy sending `X-Forwarded-Proto: https`. This restores the protection of the v4.5.7 fix, dropped in the v4.5.13 auth extraction (commit `1df2ce1`), without the v4.5.7 side effect: plain `http://SERVER_IP:8080` installs keep a non-Secure cookie, so browsers still send it back and login keeps working.
+- **Automated test suite** — New pytest harness (`tests/`, `pytest.ini`, `requirements-dev.txt`) with characterization tests for `telesaved/auth.py`, the auth/RBAC middleware and route-permission map, and source ACL (`/files/`, `/thumbs/`, `/previews/`, `/scenes/`). Runs without ML dependencies or Telegram. GitHub Actions workflow `tests.yml` runs it on push/PR to `main`.
+- **Local login fixed** — `POST /api/auth/login` returned 500 for every non-empty username on 4.5.13–4.5.15: `app.py` reads `_LOGIN_ATTEMPTS`, `_LOGIN_MAX_ATTEMPTS` and `_LOGIN_WINDOW_SECONDS`, which were never aliased from `telesaved.auth` after the extraction. Aliases restored; covered by HTTP login and lockout tests.
+
 ## 4.5.15 — Tier 2 Modular Refactor: Tier 2 COMPLETE (auth.py, jobs.py, sources.py)
 
 - **`telesaved/auth.py` extracted** (v4.5.13) — LOCAL USERS / RBAC / SESSION / LDAP section (~323 lines, 22 functions) moved from `app.py` into `telesaved/auth.py`. `_bind(cfg)` at startup; forwarding aliases in `app.py`. All existing auth call sites unchanged.
