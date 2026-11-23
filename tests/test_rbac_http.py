@@ -160,7 +160,7 @@ async def test_non_api_paths_not_gated_before_bootstrap(client):
     assert resp.status == 404
 
 
-async def test_bootstrap_creates_admin_and_sets_secure_cookie(client, app_module):
+async def test_bootstrap_creates_admin_and_sets_cookie(client, app_module):
     resp = await client.post("/api/auth/bootstrap", json={"username": "root", "password": "password123"})
     assert resp.status == 200
     body = await resp.json()
@@ -170,7 +170,7 @@ async def test_bootstrap_creates_admin_and_sets_secure_cookie(client, app_module
     assert len(cookies) == 1
     attrs = _cookie_attrs(cookies[0])
     assert attrs.get("httponly") is True
-    assert attrs.get("secure") is True
+    assert "secure" not in attrs  # plain HTTP: browsers would drop a Secure cookie
     assert attrs.get("samesite") == "Lax"
     assert attrs.get("path") == "/"
     token = cookies[0].split(";", 1)[0].split("=", 1)[1]
@@ -178,6 +178,13 @@ async def test_bootstrap_creates_admin_and_sets_secure_cookie(client, app_module
 
     again = await client.post("/api/auth/bootstrap", json={"username": "x", "password": "password123"})
     assert again.status == 409
+
+
+async def test_bootstrap_behind_tls_proxy_sets_secure_cookie(client):
+    resp = await client.post("/api/auth/bootstrap", json={"username": "root", "password": "password123"},
+                             headers={"X-Forwarded-Proto": "https"})
+    assert resp.status == 200
+    assert _cookie_attrs(_set_cookie_headers(resp)[0]).get("secure") is True
 
 
 async def test_bootstrap_validation_error(client):
@@ -299,18 +306,14 @@ async def test_admin_can_create_user(client, make_user, headers):
 
 # ── Login / logout ────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "app.py:api_auth_login reads _LOGIN_ATTEMPTS/_LOGIN_MAX_ATTEMPTS/_LOGIN_WINDOW_SECONDS, which app.py "
-    "never defines (lost in the v4.5.13 auth extraction), so every login with a username raises NameError "
-    "-> 500. When fixed this XPASSes: remove the marker and the login_route_names fixture."
-))
-async def test_login_route_is_currently_broken(client, make_user):
-    make_user("Users", username="olga", password="password123")
-    resp = await client.post("/api/auth/login", json={"username": "olga", "password": "password123"})
-    assert resp.status == 200
+def test_login_rate_limit_names_aliased_from_auth(app_module):
+    # Regression: lost in the v4.5.13 extraction, making every login a NameError -> 500.
+    assert app_module._LOGIN_ATTEMPTS is app_module._auth._LOGIN_ATTEMPTS
+    assert app_module._LOGIN_MAX_ATTEMPTS == app_module._auth._LOGIN_MAX_ATTEMPTS
+    assert app_module._LOGIN_WINDOW_SECONDS == app_module._auth._LOGIN_WINDOW_SECONDS
 
 
-async def test_login_ok_sets_secure_cookie(client, make_user, headers, login_route_names, app_module):
+async def test_login_ok_sets_cookie(client, make_user, headers, app_module):
     make_user("Users", username="olga", password="password123")
     resp = await client.post("/api/auth/login", json={"username": "Olga", "password": "password123"})
     assert resp.status == 200
@@ -320,7 +323,7 @@ async def test_login_ok_sets_secure_cookie(client, make_user, headers, login_rou
     assert len(cookies) == 1
     attrs = _cookie_attrs(cookies[0])
     assert attrs.get("httponly") is True
-    assert attrs.get("secure") is True
+    assert "secure" not in attrs
     assert attrs.get("samesite") == "Lax"
     token = cookies[0].split(";", 1)[0].split("=", 1)[1]
     assert app_module.AUTH_SESSIONS[token]["user_id"] == "olga"
@@ -328,7 +331,29 @@ async def test_login_ok_sets_secure_cookie(client, make_user, headers, login_rou
     assert (await client.get("/api/library", headers=headers(token))).status == 200
 
 
-async def test_login_wrong_password(client, make_user, login_route_names, app_module):
+async def test_login_behind_tls_proxy_sets_secure_cookie(client, make_user):
+    make_user("Users", username="olga", password="password123")
+    resp = await client.post("/api/auth/login", json={"username": "olga", "password": "password123"},
+                             headers={"X-Forwarded-Proto": "https"})
+    assert resp.status == 200
+    assert _cookie_attrs(_set_cookie_headers(resp)[0]).get("secure") is True
+
+
+async def test_cookie_only_session_over_plain_http(client, make_user):
+    # The real frontend authenticates only with the cookie (no X-Telesaved-Auth-Token).
+    make_user("Users", username="olga", password="password123")
+    client.session.cookie_jar.clear()
+    assert (await client.get("/api/library")).status == 401
+    resp = await client.post("/api/auth/login", json={"username": "olga", "password": "password123"})
+    assert resp.status == 200
+    assert (await client.get("/api/library")).status == 200
+    assert (await client.get("/api/auth/status")).status == 200
+    assert (await (await client.get("/api/auth/status")).json())["authenticated"] is True
+    assert (await client.post("/api/auth/logout")).status == 200
+    assert (await client.get("/api/library")).status == 401
+
+
+async def test_login_wrong_password(client, make_user, app_module):
     make_user("Users", username="olga", password="password123")
     resp = await client.post("/api/auth/login", json={"username": "olga", "password": "nope-nope"})
     assert resp.status == 401
@@ -336,13 +361,13 @@ async def test_login_wrong_password(client, make_user, login_route_names, app_mo
     assert app_module._auth._LOGIN_ATTEMPTS["olga"]["count"] == 1
 
 
-async def test_login_disabled_user_rejected(client, make_user, login_route_names):
+async def test_login_disabled_user_rejected(client, make_user):
     make_user("Users", username="olga", password="password123", disabled=True)
     resp = await client.post("/api/auth/login", json={"username": "olga", "password": "password123"})
     assert resp.status == 401
 
 
-async def test_login_brute_force_lockout(client, make_user, login_route_names, app_module):
+async def test_login_brute_force_lockout(client, make_user, app_module):
     make_user("Users", username="olga", password="password123")
     for i in range(10):
         resp = await client.post("/api/auth/login", json={"username": "olga", "password": f"wrong{i}xx"})

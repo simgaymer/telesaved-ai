@@ -161,7 +161,7 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 | 10A.3 | `GET /api/admin/stats` while logged in as Viewer | `403 Forbidden` | |
 | 10A.4 | `POST /api/tags/approve/{id}` while logged in as Viewer | `403 Forbidden` | |
 | 10A.5 | `DELETE /api/item/{path}` while logged in as Viewer | `403 Forbidden` | |
-| 10A.6 | `POST /api/users` while logged in as Viewer | `403 Forbidden` | |
+| 10A.6 | `POST /api/auth/users` while logged in as Viewer | `403 Forbidden` | |
 | 10A.7 | `GET /api/library` while logged in as Viewer | `200 OK`, items from allowed sources only | |
 
 ### 10B. Manager group
@@ -171,7 +171,7 @@ Use this checklist for every release before merging to `main`. Execute on a clea
 | 10B.1 | Log in as Manager | Library and Administration (limited) both accessible | |
 | 10B.2 | Manager can access Administration → Tag Management | Page renders, suggestions approvable | |
 | 10B.3 | Manager can approve a tag suggestion | Tag moves to vocabulary | |
-| 10B.4 | `POST /api/users` while logged in as Manager | `403 Forbidden` (user management is Admin-only) | |
+| 10B.4 | `POST /api/auth/users` while logged in as Manager | `403 Forbidden` (user management is Admin-only) | |
 | 10B.5 | `POST /api/sources` while logged in as Manager | `200 OK` (sources.manage granted) | |
 
 ### 10C. Source ACL

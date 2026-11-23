@@ -186,9 +186,8 @@ async def client(aiohttp_client, app_module, fresh_auth):
 def make_user(fresh_auth):
     """make_user(group, username=None, **kw) -> session token for a new local user.
 
-    The session is minted directly with create_auth_session rather than via
-    POST /api/auth/login, because that route currently raises NameError (see
-    test_rbac_http.py::test_login_route_is_currently_broken).
+    The session is minted directly with create_auth_session so RBAC tests do
+    not depend on the login route; login itself is tested in test_rbac_http.py.
     """
     counter = {"n": 0}
 
@@ -210,15 +209,3 @@ def auth_headers(token):
 @pytest.fixture
 def headers():
     return auth_headers
-
-
-@pytest.fixture
-def login_route_names(monkeypatch, app_module):
-    """Supply the rate-limit names api_auth_login reads but app.py never defines.
-
-    Lets HTTP tests characterize the rest of the login route's logic without a
-    production change. Remove once app.py aliases these from telesaved.auth.
-    """
-    monkeypatch.setattr(app_module, "_LOGIN_ATTEMPTS", _auth._LOGIN_ATTEMPTS, raising=False)
-    monkeypatch.setattr(app_module, "_LOGIN_MAX_ATTEMPTS", _auth._LOGIN_MAX_ATTEMPTS, raising=False)
-    monkeypatch.setattr(app_module, "_LOGIN_WINDOW_SECONDS", _auth._LOGIN_WINDOW_SECONDS, raising=False)

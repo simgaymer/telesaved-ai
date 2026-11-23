@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- **Auth session cookie is `Secure` again** — `telesaved/auth.py:make_auth_response` now sets `secure=True` on `telesaved_auth_token`, restoring the v4.5.7 fix that was dropped during the v4.5.13 auth extraction (commit `1df2ce1`). Deployments served over plain HTTP (no TLS-terminating proxy) will no longer have the cookie sent back by browsers.
+- **Auth session cookie is `Secure` over HTTPS** — `telesaved/auth.py:make_auth_response` sets `Secure` on `telesaved_auth_token` when the request arrived over HTTPS, directly or through a TLS-terminating reverse proxy sending `X-Forwarded-Proto: https`. This restores the protection of the v4.5.7 fix, dropped in the v4.5.13 auth extraction (commit `1df2ce1`), without the v4.5.7 side effect: plain `http://SERVER_IP:8080` installs keep a non-Secure cookie, so browsers still send it back and login keeps working.
 - **Automated test suite** — New pytest harness (`tests/`, `pytest.ini`, `requirements-dev.txt`) with characterization tests for `telesaved/auth.py`, the auth/RBAC middleware and route-permission map, and source ACL (`/files/`, `/thumbs/`, `/previews/`, `/scenes/`). Runs without ML dependencies or Telegram. GitHub Actions workflow `tests.yml` runs it on push/PR to `main`.
-- **Known issue pinned by the suite** — `POST /api/auth/login` currently returns 500 for any non-empty username: `app.py` reads `_LOGIN_ATTEMPTS`, `_LOGIN_MAX_ATTEMPTS` and `_LOGIN_WINDOW_SECONDS`, which were never aliased from `telesaved.auth` after the extraction. Tracked by a strict `xfail` test; not fixed in this change.
+- **Local login fixed** — `POST /api/auth/login` returned 500 for every non-empty username on 4.5.13–4.5.15: `app.py` reads `_LOGIN_ATTEMPTS`, `_LOGIN_MAX_ATTEMPTS` and `_LOGIN_WINDOW_SECONDS`, which were never aliased from `telesaved.auth` after the extraction. Aliases restored; covered by HTTP login and lockout tests.
 
 ## 4.5.15 — Tier 2 Modular Refactor: Tier 2 COMPLETE (auth.py, jobs.py, sources.py)
 

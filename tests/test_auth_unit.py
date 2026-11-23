@@ -76,8 +76,6 @@ def test_verify_password(auth_mod):
 
 # ── Default schema / groups ───────────────────────────────────────────────────
 
-
-
 @pytest.mark.parametrize("group", sorted(EXPECTED_DEFAULT_GROUP_PERMISSIONS))
 def test_default_group_permissions_pinned(auth_mod, group):
     assert auth_mod.DEFAULT_GROUPS[group]["permissions"] == EXPECTED_DEFAULT_GROUP_PERMISSIONS[group], (
@@ -338,12 +336,41 @@ def test_rate_limit_clear(auth_mod):
 
 # ── Responses / payloads ──────────────────────────────────────────────────────
 
+def _login_req(scheme="http", **headers):
+    req = make_mocked_request("POST", "/api/auth/login", headers=headers)
+    if scheme == "https":
+        req = req.clone(scheme="https")
+    return req
+
+
+@pytest.mark.parametrize("scheme,headers,expected", [
+    ("http", {}, False),                                    # documented http://SERVER_IP:8080 install
+    ("https", {}, True),                                    # direct TLS
+    ("http", {"X-Forwarded-Proto": "https"}, True),         # TLS-terminating reverse proxy
+    ("http", {"X-Forwarded-Proto": "HTTPS, http"}, True),   # first hop wins, case-insensitive
+    ("http", {"X-Forwarded-Proto": "http"}, False),
+])
+def test_request_is_https(auth_mod, scheme, headers, expected):
+    assert auth_mod.request_is_https(_login_req(scheme, **headers)) is expected
+
+
+def test_request_is_https_without_request(auth_mod):
+    assert auth_mod.request_is_https(None) is False
+
+
+@pytest.mark.parametrize("request_kind,secure", [("none", False), ("http", False), ("https", True), ("proxied", True)])
+def test_make_auth_response_secure_follows_https(auth_mod, request_kind, secure):
+    request = {"none": None, "http": _login_req(), "https": _login_req("https"),
+               "proxied": _login_req(**{"X-Forwarded-Proto": "https"})}[request_kind]
+    morsel = auth_mod.make_auth_response({"ok": True}, token="t", request=request).cookies["telesaved_auth_token"]
+    assert bool(morsel["secure"]) is secure
+
+
 def test_make_auth_response_cookie_flags(auth_mod):
     response = auth_mod.make_auth_response({"ok": True}, token="tok123", max_age=600)
     morsel = response.cookies["telesaved_auth_token"]
     assert morsel.value == "tok123"
     assert morsel["httponly"] is True
-    assert morsel["secure"] is True  # restored v4.5.7 fix (lost in 1df2ce1)
     assert morsel["samesite"] == "Lax"
     assert morsel["path"] == "/"
     assert str(morsel["max-age"]) == "600"

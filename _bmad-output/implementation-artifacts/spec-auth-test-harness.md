@@ -2,10 +2,10 @@
 title: 'pytest harness with auth, RBAC and source-ACL characterization tests'
 type: 'chore'
 created: '2026-11-23'
-status: 'in-progress'
+status: 'done'
 baseline_commit: 'd6dc2d4dedf1b3bd3a2098efeed3c463e783a972'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
 ---
 
@@ -21,9 +21,9 @@ context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
 
 **Always:** Tests assert current code behavior (characterization), not docs; where docs disagree, the test follows code and the discrepancy is recorded in Implementation Notes. Every test runs with `TELESAVED_BASE_PATH` pointed at a per-session tmp dir and never touches `/mnt/rda1`, the repo's `config.json`, or the network. Full suite runs in under 30 s on CPU with only `requirements-dev.txt` installed.
 
-**Decisions:** (1) Restore `secure=True` on the auth session cookie in `telesaved/auth.py:make_auth_response` in this change, pinned by a test, with a CHANGELOG entry. (2) Add a GitHub Actions workflow running the suite on push and PRs to `main`. (3) Keep as one spec despite ~1,800 tokens.
+**Decisions:** (1) Revised by the user after review: set `Secure` on the auth session cookie only when the request came over HTTPS (`request.secure` or `X-Forwarded-Proto: https`), so the documented plain-HTTP install keeps working; pinned by unit tests, HTTP tests, and a cookie-only end-to-end login test; CHANGELOG entry. (2) Add a GitHub Actions workflow running the suite on push and PRs to `main`. (3) Keep as one spec despite ~1,800 tokens. (4) Added after implementation, approved by the user: fix the local-login 500 found by the suite (`app.py` missing `_LOGIN_*` aliases from `telesaved.auth`) in this change.
 
-**Never:** No production behavior changes other than the cookie fix above. No refactor of `app.py` to make it testable. No installing torch/CLIP/YOLO/NudeNet/whisper for tests. No tests outside auth/RBAC/ACL scope (pipeline, audio, jobs are follow-ups).
+**Never:** No production behavior changes other than the cookie fix and login-alias fix above. No refactor of `app.py` to make it testable. No installing torch/CLIP/YOLO/NudeNet/whisper for tests. No tests outside auth/RBAC/ACL scope (pipeline, audio, jobs are follow-ups).
 
 ## I/O & Edge-Case Matrix
 
@@ -34,7 +34,7 @@ context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
 | Viewer (Users) | `GET /api/admin/stats`, `POST /api/sources`, `DELETE /api/item/x` | 403 `forbidden` | N/A |
 | Manager | `POST /api/sources` → allowed; `/api/admin/*` → 403 | per `required_permission_for_request` | N/A |
 | Admin (`*`) | any route | passes middleware | N/A |
-| Login OK | valid local creds | 200, cookie `telesaved_auth_token` HttpOnly, Secure, SameSite=Lax | N/A |
+| Login OK | valid local creds | 200, cookie `telesaved_auth_token` HttpOnly, SameSite=Lax; Secure only when HTTPS or `X-Forwarded-Proto: https` | cookie alone (no header) authenticates follow-up requests over plain HTTP |
 | Login brute force | 10 wrong passwords, then 11th | 11th → 429 even with correct password | lockout window 300 s |
 | Disabled user | valid session, user then disabled | next request 401, session dropped | N/A |
 | Source ACL | Viewer granted source A only | path in A allowed; path in B → 403; `sources.manage` or `*` grant → all | legacy file with no `source_ref` maps to `me` |
@@ -87,7 +87,25 @@ context: ['{project-root}/ARCHITECTURE.md', '{project-root}/docs/SMOKE_TEST.md']
 
 ## Spec Change Log
 
+- **Iteration 1 (intent_gap):** Review found unconditional `secure=True` locks out the documented `http://SERVER_IP:8080` install (frontend authenticates by cookie only; browsers drop Secure cookies on plain HTTP). User chose "Secure only on HTTPS". Amended decision (1) and the Login OK matrix row. Avoids: every standard install losing login after upgrade. KEEP: the harness, fixtures, permission table, ACL tests, and the login-alias fix were unaffected and kept as-is; only the cookie logic and its tests were re-derived.
+
 ## Review Triage Log
+
+| # | Finding | Verdict | Evidence / route |
+|---|---------|---------|------------------|
+| 1 | Unconditional Secure cookie locks out plain-HTTP installs (blind, edge) | high | `frontend/index.html:848` cookie-only; docs say `http://SERVER_IP:8080`. intent_gap → user chose HTTPS-only Secure; fixed. |
+| 2 | No cookie-only end-to-end auth test (blind, edge) | medium | All HTTP tests used the header. Same root as 1; added `test_cookie_only_session_over_plain_http`, which fails if Secure is forced. |
+| 3 | `api_auth_login` duplicates the lockout check instead of calling an auth helper | medium | Real: the split is why extraction broke login. Pre-existing design; defer. |
+| 4 | Alias identity relies on `_bind` clearing dicts in place | low | Pinned by `test_rebind_clears_sessions_and_login_attempts` and the alias test; reject. |
+| 5 | Unbounded `_LOGIN_ATTEMPTS` growth / per-username lockout DoS; LDAP branch untested | medium | Pre-existing behavior, not caused by this change; defer. |
+| 6 | No completeness check that every registered `/api/*` route is in the permission table | medium | Real: new routes silently fall through to `library.view`. Pre-existing; defer. |
+| 7 | requirements-dev comment overstates what conftest stubs | low | Correct; patched. |
+| 8 | `config.json` hiding depends on `os.path.exists` | medium | Real fragility; the `client is None` assert limits harm. defer (needs a config-path seam in app.py). |
+| 9 | SMOKE_TEST 10A.6/10B.4 name `POST /api/users` | low | Real route is `/api/auth/users`; patched doc. |
+| 10 | pytest-asyncio not pinned though pytest.ini needs >=0.24 | low | Patched requirements-dev. Action SHA pinning / lint step: reject (not needed for a test gate). |
+| 11 | Source-ACL fixture cleanup hard-coded; implicit `fresh_auth` | low | Session tmp dir is deleted at end; reject. |
+| 12 | Stray blank lines; no `pythonpath` | low | Patched. |
+| 13 | Privacy cookie (`app.py:6881`) not Secure (verification-gap, noted) | low | Out of the auth-cookie scope; defer with item 3 batch. |
 
 ## Design Notes
 
