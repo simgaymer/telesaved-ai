@@ -103,9 +103,38 @@ def test_fresh_auth_data_defaults(auth_mod):
     assert data["source_access"]["groups"] == {"Admin": ["*"], "Manager": ["*"], "Users": []}
     assert data["source_access"]["users"] == {}
     assert data["identity"]["local"] == {"enabled": True, "emergency_admin": True}
-    assert data["identity"]["oidc"] == {"enabled": False}
+    assert data["identity"]["oidc"] == auth_mod.oidc_default_settings()
+    assert data["identity"]["oidc"]["enabled"] is False
     assert data["identity"]["ldap"]["enabled"] is False
     assert auth_mod.auth_initialized() is False
+
+
+def test_legacy_oidc_settings_are_upgraded_with_defaults(auth_mod, auth_store):
+    auth_store["memory://auth.json"] = {"identity": {"oidc": {"enabled": False}}}
+    auth_mod._bind(dict(auth_mod._cfg))
+    oidc = auth_mod.auth_data["identity"]["oidc"]
+    assert oidc == auth_mod.oidc_default_settings()
+    assert oidc["groups_claim"] == "groups"
+    assert oidc["username_claim"] == "preferred_username"
+    assert oidc["link_ldap_accounts"] is False
+
+
+def test_ldap_map_groups_by_name_and_dn_plus_defaults(app_module, fresh_auth):
+    settings = {
+        "group_mappings": {
+            "Admins": ["Admin"],
+            "cn=media,cn=groups,cn=accounts,dc=example,dc=org": ["Manager"],
+        },
+        "default_groups": ["Users"],
+    }
+    # name match is case-insensitive
+    assert app_module.ldap_map_groups(["admins"], [], settings) == ["Admin", "Users"]
+    # DN-keyed mapping matches the group DN
+    dns = ["CN=media,cn=groups,cn=accounts,dc=example,dc=org"]
+    assert app_module.ldap_map_groups(["media"], dns, settings) == ["Manager", "Users"]
+    assert app_module.ldap_map_groups(["other"], [], settings) == ["Users"]
+    # unknown default groups fall back to Users
+    assert app_module.ldap_map_groups([], [], {"group_mappings": {}, "default_groups": ["Nope"]}) == ["Users"]
 
 
 def test_load_merges_stored_groups_but_forces_system_flag(auth_mod, auth_store):

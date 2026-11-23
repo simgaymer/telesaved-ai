@@ -5,6 +5,7 @@
 aiohttp>=3.9
 telethon>=1.36
 numpy>=1.26
+PyJWT[crypto]>=2.8,<3  # OIDC ID-token validation (telesaved/oidc.py)
 pytest>=8.0
 pytest-aiohttp>=1.0
 pytest-asyncio>=0.24  # pytest.ini sets asyncio_default_fixture_loop_scope

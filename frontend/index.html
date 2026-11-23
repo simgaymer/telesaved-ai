@@ -877,7 +877,8 @@
   const LEGAL = "TeleSaved AI is a personal media archiving tool. Compliance with all applicable laws governing the downloading, possession, and use of content — including copyright, obscenity, and any other relevant statutes in your jurisdiction — is solely the responsibility of the user.";
 
   /* ─────────── Sidebar ─────────── */
-  function Sidebar({ view, setView, adminTab, setAdminTab, currentUser, onLogout }) {
+  function Sidebar({ view, setView, adminTab, setAdminTab, currentUser, onLogout, permissions }) {
+    const canManageSecurity = (permissions || []).some(p => p === "*" || p === "security.manage");
     const nav = (v, icon, label) => (
       <button className={`nav-item ${view === v ? "active" : ""}`} onClick={() => setView(v)}>
         <span className="ni">{icon}</span>{label}
@@ -922,6 +923,7 @@
           {adm("tags",       "🏷", "Tag Management")}
           {adm("scoring",    "🎯", "Scoring")}
           {adm("users",      "👥", "Users & Groups")}
+          {canManageSecurity && adm("identity", "🔐", "Identity")}
           {adm("system",     "🔧", "System")}
           {adm("logs",       "📋", "Logs")}
         </div>
@@ -1185,11 +1187,37 @@
   }
 
   /* ─────────── LoginPage ─────────── */
-  function LoginPage({ bootstrapRequired, onLogin }) {
+  const SSO_LOGIN_ERRORS = {
+    state: "Your sign-in attempt expired or was already used. Please try again.",
+    token: "The identity provider's response could not be verified. Please try again or ask an administrator.",
+    exchange: "Sign-in could not be completed with the identity provider. Please try again.",
+    access_denied: "Sign-in was cancelled or denied at the identity provider.",
+    conflict: "A local TeleSaved account already uses this username. Ask an administrator.",
+    not_provisioned: "Your account has not been set up in TeleSaved yet. Ask an administrator.",
+    disabled: "Your TeleSaved account is disabled.",
+    oidc_disabled: "Single sign-on is not enabled.",
+    config: "Single sign-on is not configured correctly. Ask an administrator.",
+    claims: "The identity provider did not send a usable username.",
+    bootstrap: "Create the first Admin account before using single sign-on.",
+  };
+  function takeLoginError() {
+    // Read ?login_error= once (set by the OIDC callback) and drop it from the URL.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("login_error");
+      if (!code) return "";
+      params.delete("login_error");
+      const qs = params.toString();
+      window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : "") + window.location.hash);
+      return SSO_LOGIN_ERRORS[code] || "Single sign-on failed. Please try again or ask an administrator.";
+    } catch { return ""; }
+  }
+  function LoginPage({ bootstrapRequired, onLogin, oidc }) {
     const [user, setUser] = useState("");
     const [pass, setPass] = useState("");
-    const [err, setErr] = useState("");
+    const [err, setErr] = useState(() => takeLoginError());
     const [loading, setLoading] = useState(false);
+    const showSso = !bootstrapRequired && oidc && oidc.enabled;
 
     async function submit(e) {
       e.preventDefault();
@@ -1223,6 +1251,16 @@
               {loading ? "Signing in…" : bootstrapRequired ? "Create Account & Sign In" : "Sign In"}
             </button>
           </form>
+          {showSso && (
+            <div style={{marginTop:16}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,color:"var(--muted)",fontSize:12,margin:"4px 0 12px"}}>
+                <div style={{flex:1,borderTop:"1px solid var(--border)"}} />or<div style={{flex:1,borderTop:"1px solid var(--border)"}} />
+              </div>
+              <a className="btn btn-secondary" style={{width:"100%",display:"block",textAlign:"center",textDecoration:"none",boxSizing:"border-box"}} href="/api/auth/oidc/login">
+                {oidc.button_label || "Sign in with SSO"}
+              </a>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2790,6 +2828,180 @@
     );
   }
 
+  /* ─────────── AdminIdentity (OIDC single sign-on) ─────────── */
+  function AdminIdentity({ onToast }) {
+    const [form, setForm] = useState(null);
+    const [meta, setMeta] = useState({ redirect_uri: "", available_groups: [], status: {} });
+    const [secret, setSecret] = useState("");
+    const [clearSecret, setClearSecret] = useState(false);
+    const [mappingText, setMappingText] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState(null);
+    const setF = (k, v) => setForm(f => ({...f, [k]: v}));
+
+    function mappingsToText(m) {
+      return Object.entries(m || {}).map(([k, v]) => `${k} = ${(v || []).join(", ")}`).join("\n");
+    }
+    function textToMappings(text) {
+      const out = {};
+      // Split on the LAST " = " so DN-style keys (cn=admins,cn=groups,dc=x) keep their "=".
+      String(text || "").split("\n").forEach(line => {
+        const i = line.lastIndexOf(" = ");
+        if (i <= 0) return;
+        const key = line.slice(0, i).trim();
+        const targets = line.slice(i + 3).split(",").map(t => t.trim()).filter(Boolean);
+        if (key && targets.length) out[key] = targets;
+      });
+      return out;
+    }
+    function applyResponse(r) {
+      setForm(r.settings || {});
+      setMappingText(mappingsToText((r.settings || {}).group_mappings));
+      setMeta({ redirect_uri: r.redirect_uri || "", available_groups: r.available_groups || [], status: r.status || {} });
+      setSecret(""); setClearSecret(false);
+    }
+    async function load() {
+      try { applyResponse(await api("/api/auth/oidc/settings")); }
+      catch (e) { onToast(e.message, "error"); }
+    }
+    useEffect(() => { load(); }, []);
+
+    function payload() {
+      const { client_secret_set, client_secret, ...rest } = form;
+      const out = { ...rest, group_mappings: textToMappings(mappingText) };
+      if (clearSecret) { out.client_secret = ""; out.clear_client_secret = true; }
+      else out.client_secret = secret ? secret : "__KEEP__";
+      return out;
+    }
+    async function save() {
+      setSaving(true);
+      try {
+        const r = await api("/api/auth/oidc/settings", { method: "PUT", body: JSON.stringify({ settings: payload() }) });
+        applyResponse(r); onToast("Identity settings saved");
+      } catch (e) { onToast(e.message, "error"); }
+      setSaving(false);
+    }
+    async function test() {
+      setTesting(true); setTestResult(null);
+      try {
+        const res = await fetch("/api/auth/oidc/test", {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: payload() }),
+        });
+        const body = await res.json().catch(() => ({}));
+        setTestResult(body.result || { ok: false, error: body.error || `HTTP ${res.status}` });
+      } catch (e) { setTestResult({ ok: false, error: e.message }); }
+      setTesting(false);
+    }
+
+    if (!form) return <div style={{padding:24,color:"var(--muted)"}}>Loading…</div>;
+    const text = (k, label, opts = {}) => (
+      <div>
+        <label className="field-label">{label}</label>
+        <input className="field" value={form[k] == null ? "" : form[k]} placeholder={opts.placeholder || ""} onChange={e => setF(k, e.target.value)} />
+        {opts.hint && <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>{opts.hint}</div>}
+      </div>
+    );
+    const check = (k, label) => (
+      <label style={{display:"flex",gap:8,alignItems:"center",cursor:"pointer",fontSize:13}}>
+        <input type="checkbox" checked={!!form[k]} onChange={e => setF(k, e.target.checked)} style={{accentColor:"var(--accent)"}} />
+        {label}
+      </label>
+    );
+    const defaults = form.default_groups || [];
+    const toggleDefault = g => setF("default_groups", defaults.includes(g) ? defaults.filter(x => x !== g) : [...defaults, g]);
+    const panel = {background:"var(--panel-2)",borderRadius:"var(--radius)",padding:16,marginBottom:16};
+    return (
+      <div style={{padding:24}}>
+        <div style={{fontWeight:700,fontSize:18,marginBottom:6}}>🔐 Identity — Single Sign-On (OIDC)</div>
+        <div style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>
+          OpenID Connect login (Authorization Code + PKCE), e.g. Keycloak federating FreeIPA. Local username/password login stays available.
+        </div>
+        <div style={panel}>
+          <div style={{display:"flex",gap:20,flexWrap:"wrap",marginBottom:12}}>
+            {check("enabled", "Enable OIDC login")}
+            {check("auto_create_users", "Auto-create users on first login")}
+            {check("sync_groups_on_login", "Sync groups on every login")}
+            {check("link_ldap_accounts", "Link existing LDAP accounts (LDAP password login is then refused for them)")}
+          </div>
+          <div style={{fontSize:12,color:"var(--muted)"}}>
+            Status: {meta.status.login_available ? "ready" : meta.status.enabled ? "enabled but not configured" : "disabled"}
+            {meta.status.pyjwt_available === false && <span style={{color:"var(--danger)"}}> · PyJWT is not installed</span>}
+          </div>
+        </div>
+        <div style={panel}>
+          <div style={{fontWeight:600,marginBottom:10}}>Provider</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
+            {text("issuer", "Issuer URL", { placeholder: "https://sso.example.org/realms/example", hint: "Discovery is read from <issuer>/.well-known/openid-configuration" })}
+            {text("client_id", "Client ID", { placeholder: "telesaved" })}
+            <div>
+              <label className="field-label">Client secret</label>
+              <input className="field" type="password" autoComplete="new-password" value={secret} disabled={clearSecret}
+                placeholder={form.client_secret_set ? "set — leave blank to keep" : "not set"} onChange={e => setSecret(e.target.value)} />
+              {form.client_secret_set && (
+                <label style={{display:"flex",gap:6,alignItems:"center",fontSize:11,color:"var(--muted)",marginTop:4,cursor:"pointer"}}>
+                  <input type="checkbox" checked={clearSecret} onChange={e => setClearSecret(e.target.checked)} /> Clear stored secret
+                </label>
+              )}
+            </div>
+            {text("scopes", "Scopes", { placeholder: "openid profile email groups" })}
+            {text("public_base_url", "Public base URL", { placeholder: "https://telesaved.example.org", hint: "Required: the address users open TeleSaved at; defines the redirect URI" })}
+            {text("ca_file", "CA bundle file (optional)", { placeholder: "/etc/ipa/ca.crt", hint: "Path on the server, for a private CA" })}
+            {text("button_label", "Login button label", { placeholder: "Sign in with SSO" })}
+          </div>
+          <div style={{marginTop:12,fontSize:12}}>
+            <span style={{color:"var(--muted)"}}>Redirect URI to register at the IdP: </span>
+            <code style={{background:"var(--panel)",padding:"2px 6px",borderRadius:4,wordBreak:"break-all"}}>{meta.redirect_uri || "set Public base URL first"}</code>
+          </div>
+        </div>
+        <div style={panel}>
+          <div style={{fontWeight:600,marginBottom:10}}>Claims & groups</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12,marginBottom:12}}>
+            {text("username_claim", "Username claim", { placeholder: "preferred_username" })}
+            {text("groups_claim", "Groups claim", { placeholder: "groups" })}
+          </div>
+          <label className="field-label">Group mappings (one per line: <code>idp-group = TeleSaved group, …</code>)</label>
+          <textarea className="field" rows={5} style={{fontFamily:"monospace",fontSize:12}} value={mappingText}
+            placeholder={"admins = Admin\ncn=media,cn=groups,cn=accounts,dc=example,dc=org = Manager"} onChange={e => setMappingText(e.target.value)} />
+          <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Available groups: {meta.available_groups.join(", ")}</div>
+          {(() => {
+            const unknown = [...new Set(Object.values(textToMappings(mappingText)).flat().filter(g => !meta.available_groups.includes(g)))];
+            return unknown.length > 0 && (
+              <div className="form-error" style={{marginTop:4}}>Unknown TeleSaved group(s), ignored on save: {unknown.join(", ")}</div>
+            );
+          })()}
+          <label className="field-label" style={{marginTop:12}}>Default groups (always added)</label>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+            {meta.available_groups.map(g => (
+              <label key={g} style={{display:"flex",gap:6,alignItems:"center",fontSize:13,cursor:"pointer"}}>
+                <input type="checkbox" checked={defaults.includes(g)} onChange={() => toggleDefault(g)} style={{accentColor:"var(--accent)"}} />{g}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+          <button className="btn btn-secondary btn-sm" onClick={test} disabled={testing}>{testing ? "Testing…" : "Test"}</button>
+        </div>
+        {testResult && (
+          <div style={{...panel,marginTop:16,borderLeft:`3px solid ${testResult.ok ? "var(--success)" : "var(--danger)"}`}}>
+            <div style={{fontWeight:600,marginBottom:6}}>{testResult.ok ? "Provider reachable" : "Test failed"}</div>
+            {testResult.error && <div className="form-error">{testResult.error}</div>}
+            <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.7}}>
+              Discovery: {testResult.discovery ? "ok" : "—"} · JWKS: {testResult.jwks ? `${testResult.jwks_keys} signing key(s)` : "—"}
+              {testResult.issuer && <div>Issuer: {testResult.issuer}</div>}
+              {testResult.authorization_endpoint && <div>Authorization endpoint: {testResult.authorization_endpoint}</div>}
+              {testResult.token_endpoint && <div>Token endpoint: {testResult.token_endpoint}</div>}
+              {testResult.redirect_uri && <div>Redirect URI: {testResult.redirect_uri}</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   /* ─────────── AdminSystem ─────────── */
   function AdminSystem({ onToast }) {
     const [settings, setSettings] = useState(null);
@@ -2918,6 +3130,7 @@
       case "tags":       return <AdminTagManagement onToast={onToast} />;
       case "scoring":    return <AdminScoring onToast={onToast} />;
       case "users":      return <AdminUsers onToast={onToast} />;
+      case "identity":   return <AdminIdentity onToast={onToast} />;
       case "system":     return <AdminSystem onToast={onToast} />;
       case "logs":       return <AdminLogs onToast={onToast} />;
       default:           return <AdminDashboard onToast={onToast} />;
@@ -2963,6 +3176,7 @@
     const [appState, setAppState] = useState("loading"); // loading | setup | login | ready | error
     const [authError, setAuthError] = useState("");
     const [bootstrapRequired, setBootstrapRequired] = useState(false);
+    const [oidcLogin, setOidcLogin] = useState(null);
     const [currentUser, setCurrentUser] = useState(null);
     const [permissions, setPermissions] = useState([]);
     const [connectivityStatus, setConnectivityStatus] = useState(null);
@@ -3005,6 +3219,7 @@
         if (health && health.setup_required) { setAppState("setup"); return; }
         setConnectivityStatus(health?.connectivity_status || null);
         const auth = await api("/api/auth/status");
+        setOidcLogin((auth && auth.oidc) || null);
         if (!auth || auth.bootstrap_required) { setBootstrapRequired(true); setAppState("login"); return; }
         if (!auth.authenticated) { setBootstrapRequired(false); setAppState("login"); return; }
         setCurrentUser((auth.user && (auth.user.display_name || auth.user.username || auth.user.id)) || auth.username || "user");
@@ -3097,7 +3312,7 @@
 
     // Login
     if (appState === "login") {
-      return <LoginPage bootstrapRequired={bootstrapRequired} onLogin={handleLogin} />;
+      return <LoginPage bootstrapRequired={bootstrapRequired} onLogin={handleLogin} oidc={oidcLogin} />;
     }
 
     // Main app shell
@@ -3105,7 +3320,7 @@
       <div className="app">
         <Sidebar view={view} setView={v => setView(v)}
           adminTab={adminTab} setAdminTab={setAdminTab}
-          currentUser={currentUser} onLogout={handleLogout} />
+          currentUser={currentUser} onLogout={handleLogout} permissions={permissions} />
         <div className="main">
           <ConnectivityBanner status={connectivityStatus} />
           <Toast message={toast.message} type={toast.type} onDismiss={() => setToast({ message: "", type: "success" })} />
