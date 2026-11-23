@@ -1164,6 +1164,10 @@ def require_permission_response(request, permission):
     if permission and not user_has_permission(user, permission):
         return web.json_response({"ok": False, "forbidden": True, "error": f"Permission required:{permission}"}, status=403)
     return None
+def filter_items_for_request(request, items):
+    """Drop items from sources the requesting user has no grant for."""
+    user = auth_current_user(request)
+    return [item for item in items if user_can_access_path(user, item.get("path", ""))]
 def require_source_access_response(request, rel_path):
     user = auth_current_user(request)
     if not user_can_access_path(user, rel_path):
@@ -4352,7 +4356,7 @@ def apply_library_import_rows(rows, import_tags=True, import_notes=True, dry_run
     result["ok"] = True
     result["dry_run"] = bool(dry_run)
     return result
-def collection_items(collection, page=1, sort_override=None, dir_override=None):
+def collection_items(collection, request, page=1, sort_override=None, dir_override=None):
     collection = normalize_collection_payload(collection, collection)
     items = build_library_items(
         q=collection.get("q", ""),
@@ -4366,8 +4370,7 @@ def collection_items(collection, page=1, sort_override=None, dir_override=None):
     )
     sort_by = sort_override or collection.get("sort") or "path"
     sort_dir = dir_override or collection.get("dir") or "asc"
-    current_user = auth_current_user(request)
-    items = [item for item in items if user_can_access_path(current_user, item.get("path", ""))]
+    items = filter_items_for_request(request, items)
     items, sort_by, sort_dir = sort_library_items(items, sort_by=sort_by, sort_dir=sort_dir)
     paged_items, page, total_pages, total_items = paginate_items(items, page)
     return {
@@ -6416,7 +6419,7 @@ async def api_librarian_ask(request):
                 filters["limit"] = max(1, min(int(requested_limit), 100))
             except Exception:
                 pass
-        items = librarian_item_pool(filters)
+        items = filter_items_for_request(request, librarian_item_pool(filters))
         total = len(items)
         limit = max(1, min(int(filters.get("limit") or 24), 100))
         serialized = [serialize_item(item) for item in items[:limit]]
@@ -6475,6 +6478,7 @@ async def api_library(request):
         performer_presentation=request.query.get("performer_presentation", "").strip() or None,
         act_tag=request.query.get("act_tag", "").strip() or None,
     )
+    items = filter_items_for_request(request, items)
     items, sort_by, sort_dir = sort_library_items(items, sort_by=sort_by, sort_dir=sort_dir)
     paged_items, page, total_pages, total_items = paginate_items(items, page)
     return web.json_response({
@@ -7290,7 +7294,7 @@ async def api_collections_items(request):
     page = parse_page(request.query.get("page", "1"))
     sort_by = request.query.get("sort") or col.get("sort") or "path"
     sort_dir = request.query.get("dir") or col.get("dir") or "asc"
-    result = collection_items(col, page=page, sort_override=sort_by, dir_override=sort_dir)
+    result = collection_items(col, request, page=page, sort_override=sort_by, dir_override=sort_dir)
     return web.json_response({"ok": True, "collection": col, **result})
 @routes.get("/api/trash")
 async def api_trash_list(request):
@@ -7569,20 +7573,6 @@ async def api_item_scenes_post(request):
     except Exception as e:
         logger.exception("Scene timeline generation failed for %s", rel_path)
         return web.json_response({"ok": False, "error": str(e)}, status=500)
-@routes.get("/api/item/{path:.*}")
-async def api_item_detail(request):
-    rel_path = request.match_info["path"]
-    denied = require_source_access_response(request, rel_path)
-    if denied:
-        return denied
-    try:
-        item = build_item_detail_payload(rel_path, include_similar=True)
-        return web.json_response(item)
-    except FileNotFoundError:
-        return web.json_response({"ok": False, "error": "File not found in index"}, status=404)
-    except Exception as e:
-        logger.exception("Item detail failed for %s", rel_path)
-        return web.json_response({"ok": False, "error": str(e)}, status=500)
 def _srt_timestamp(seconds):
     """Convert float seconds to SRT timestamp format HH:MM:SS,mmm."""
     try:
@@ -7707,7 +7697,8 @@ async def api_item_similar(request):
         limit = int(request.query.get("limit", "8"))
     except Exception:
         limit = 8
-    return web.json_response({"ok": True, "items": similar_video_items(rel_path, limit=limit)})
+    items = filter_items_for_request(request, similar_video_items(rel_path, limit=limit))
+    return web.json_response({"ok": True, "items": items})
 @routes.post("/api/item/{path:.*}/rename")
 async def api_item_rename(request):
     rel_path = request.match_info["path"]
@@ -8176,6 +8167,23 @@ async def api_item_audio_transcript_save(request):
         "transcript_text": audio["transcript_text"],
     })
 
+# Registered after every GET /api/item/{path}/<suffix> route: aiohttp matches in
+# registration order and {path:.*} would otherwise swallow the suffixed paths.
+@routes.get("/api/item/{path:.*}")
+async def api_item_detail(request):
+    rel_path = request.match_info["path"]
+    denied = require_source_access_response(request, rel_path)
+    if denied:
+        return denied
+    try:
+        item = build_item_detail_payload(rel_path, include_similar=True)
+        item["similar"] = filter_items_for_request(request, item.get("similar") or [])
+        return web.json_response(item)
+    except FileNotFoundError:
+        return web.json_response({"ok": False, "error": "File not found in index"}, status=404)
+    except Exception as e:
+        logger.exception("Item detail failed for %s", rel_path)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
 # ================= STATIC FILES =================
 @routes.get("/frame-preview/{video_key}/{frame_name}")
 async def serve_frame_preview(request):
