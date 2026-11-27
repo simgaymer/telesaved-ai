@@ -7105,7 +7105,7 @@ async def api_admin_overview(request):
             "log_file": LOG_FILE,
             "trash_directory": TRASH_PATH,
             "backup_directory": BACKUP_PATH,
-            "device": device,
+            "device": _pipeline.device,
         },
         "bulk_job": bulk_job,
         "index_sweep": index_sweep_status,

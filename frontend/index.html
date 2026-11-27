@@ -1315,7 +1315,7 @@
         const r = await api(`/api/item/${encoded}`);
         setItem(r);
         setTagInput((r.tags || []).join(", "));
-        setPersonalForm({ rating: r.personal_rating || 0, notes: r.personal_notes || "", favorite: r.favorite || false });
+        setPersonalForm({ rating: r.rating || 0, notes: r.notes || "", favorite: r.favorite || false });
         setWatchLater(r.watch_later || false);
         setAudioStatus(r.audio);
       } catch (e) {
@@ -1367,14 +1367,17 @@
 
     async function savePersonal() {
       try {
-        await api(`/api/item/${encoded}/personal`, { method: "POST", body: JSON.stringify(personalForm) });
+        // Backend splits these: /personal takes rating+favorite, notes have their own endpoint.
+        await api(`/api/item/${encoded}/personal`, { method: "POST", body: JSON.stringify({ rating: personalForm.rating, favorite: personalForm.favorite }) });
+        await api(`/api/item/${encoded}/notes`, { method: "POST", body: JSON.stringify({ notes: personalForm.notes }) });
         onToast("Saved");
       } catch (e) { onToast(e.message, "error"); }
     }
 
     async function toggleWatchLater() {
       try {
-        await api(`/api/item/${encoded}/watch-later`, { method: "POST" });
+        // Backend defaults watch_later to true when omitted, so send the new state explicitly.
+        await api(`/api/item/${encoded}/watch-later`, { method: "POST", body: JSON.stringify({ watch_later: !watchLater }) });
         setWatchLater(w => !w);
         onToast(watchLater ? "Removed from Watch Later" : "Added to Watch Later");
       } catch (e) { onToast(e.message, "error"); }
@@ -1736,7 +1739,7 @@
       if (!val.trim()) return;
       setSending(true);
       try {
-        await api("/api/tags/suggestions", { method: "POST", body: JSON.stringify({ tag: val.trim(), path: decodeURIComponent(path) }) });
+        await api("/api/tags/suggest", { method: "POST", body: JSON.stringify({ tag: val.trim(), video_path: decodeURIComponent(path) }) });
         onToast("Suggestion submitted");
         setVal(""); setOpen(false);
       } catch (e) { onToast(e.message, "error"); }
@@ -1936,7 +1939,7 @@
         if (filters.duration_max) params.set("duration_max", filters.duration_max);
         const r = await api(`/api/library?${params}`);
         setItems(r.items || []);
-        setTotal(r.total || 0);
+        setTotal(r.total_items ?? r.total ?? 0);
         setTotalPages(r.total_pages || 1);
         setSelected(new Set());
       } catch (e) { onToast(e.message, "error"); }
@@ -2128,7 +2131,7 @@
     const [loading, setLoading] = useState(true);
     async function load() {
       setLoading(true);
-      try { const r = await api("/api/watch"); setItems(r.items || r || []); }
+      try { const r = await api("/api/watch"); setItems(Array.isArray(r.watch_later) ? r.watch_later : []); }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2218,7 +2221,12 @@
     const [deleteCollectionId, setDeleteCollectionId] = useState(null);
     async function load() {
       setLoading(true);
-      try { const r = await api("/api/collections"); setCollections(r.collections || r || []); }
+      try {
+        const r = await api("/api/collections");
+        const counts = r.counts || {};
+        // Backend stores the search as `q` and returns item counts in a separate map keyed by id.
+        setCollections((r.collections || []).map(c => ({ ...c, query: c.q || "", count: counts[c.id] })));
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2226,7 +2234,7 @@
     async function create() {
       if (!newName.trim()) return;
       try {
-        await api("/api/collections", { method: "POST", body: JSON.stringify({ name: newName.trim(), query: newQuery.trim() }) });
+        await api("/api/collections", { method: "POST", body: JSON.stringify({ name: newName.trim(), q: newQuery.trim() }) });
         onToast("Collection created"); setCreating(false); setNewName(""); setNewQuery(""); load();
       } catch (e) { onToast(e.message, "error"); }
     }
@@ -2283,7 +2291,11 @@
     const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
     async function load() {
       setLoading(true);
-      try { const r = await api("/api/trash"); setItems(r.items || r || []); }
+      try {
+        const r = await api("/api/trash");
+        // Trash records use trash_id / original_path / trashed_at.
+        setItems((r.items || []).map(t => ({ ...t, id: t.trash_id, path: t.original_path, deleted_at: t.trashed_at })));
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2330,7 +2342,12 @@
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     async function load() {
-      try { const r = await api("/api/downloads"); setData(r); }
+      try {
+        const r = await api("/api/downloads");
+        // Download records key on message_id and report progress as `percent`.
+        const norm = d => ({ ...d, id: d.message_id, name: d.filename || (d.message_id != null ? `Message ${d.message_id}` : ""), progress: d.percent });
+        setData({ ...r, active: (r.active || []).map(norm), history: (r.history || []).map(norm) });
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2372,7 +2389,7 @@
             {(data.history || []).slice(0,20).map((d, i) => (
               <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid var(--border)",fontSize:13}}>
                 <span style={{color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis"}}>{d.name || d.filename}</span>
-                <span className={`pill ${d.status === "done" ? "pill-green" : "pill-red"}`}>{d.status}</span>
+                <span className={`pill ${d.status === "complete" || d.status === "duplicate" ? "pill-green" : "pill-red"}`}>{d.status}</span>
               </div>
             ))}
           </>
@@ -2386,7 +2403,15 @@
     const [jobs, setJobs] = useState([]);
     const [loading, setLoading] = useState(true);
     async function load() {
-      try { const r = await api("/api/jobs"); setJobs(r.jobs || r || []); }
+      try {
+        const r = await api("/api/jobs");
+        // /api/jobs returns a summary: {active:[...], recent:[...], counts, engine}. Show active first, then recent.
+        const s = r.jobs || {};
+        const active = s.active || [];
+        const seen = new Set(active.map(j => j.id));
+        const list = [...active, ...(s.recent || []).filter(j => !seen.has(j.id))];
+        setJobs(list.map(j => ({ ...j, name: j.title, type: j.kind, source: j.source_ref, progress: j.percent })));
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2396,7 +2421,7 @@
       try { await api(`/api/jobs/${id}/${action}`, { method: "POST" }); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
-    const statusColor = s => s === "running" ? "pill-green" : s === "paused" ? "pill-warning" : s === "error" ? "pill-red" : "pill-orange";
+    const statusColor = s => s === "running" || s === "complete" ? "pill-green" : s === "paused" ? "pill-warning" : s === "failed" || s === "error" ? "pill-red" : "pill-orange";
     return (
       <div style={{padding:24}}>
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>⚙ Jobs</div>
@@ -2438,7 +2463,22 @@
   function AdminDashboard({ onToast }) {
     const [data, setData] = useState(null);
     useEffect(() => {
-      api("/api/admin/overview").then(r => setData(r)).catch(e => onToast(e.message,"error"));
+      api("/api/admin/overview").then(r => {
+        // Flatten the overview payload into the card fields this view renders.
+        const ls = r.library_stats || {};
+        const counts = r.counts || {};
+        const jobs = r.jobs || {};
+        setData({
+          ...r,
+          total_videos: ls.total_videos,
+          total_size_human: ls.total_size_human,
+          source_count: (ls.by_source || []).length,
+          jobs_running: (jobs.active || []).length,
+          processed_count: counts.indexed_files,
+          pending_count: counts.review_queue,
+          by_source: (ls.by_source || []).map(s => ({ name: s.label, count: s.count })),
+        });
+      }).catch(e => onToast(e.message,"error"));
     }, []);
     if (!data) return <div style={{padding:24,color:"var(--muted)"}}>Loading…</div>;
     return (
@@ -2450,8 +2490,8 @@
             ["Total Size", data.total_size_human],
             ["Sources", data.source_count],
             ["Jobs Running", data.jobs_running],
-            ["Processed", data.processed_count],
-            ["Pending", data.pending_count],
+            ["Indexed", data.processed_count],
+            ["Needs Review", data.pending_count],
           ].filter(([,v]) => v != null).map(([k, v]) => (
             <div key={k} style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:"14px 16px"}}>
               <div style={{fontSize:22,fontWeight:800,color:"var(--accent)"}}>{v}</div>
@@ -2490,16 +2530,37 @@
     const [adding, setAdding] = useState(false);
     const [form, setForm] = useState({ name: "", chat_id: "", type: "channel", auto_download: true });
     const setF = (k, v) => setForm(f => ({...f, [k]: v}));
+    // Full profile objects from the last successful load. POST /api/sources REPLACES the whole
+    // source list, so adding must resend every existing profile; null = not loaded, never POST.
+    const [profiles, setProfiles] = useState(null);
     async function load() {
       setLoading(true);
-      try { const r = await api("/api/sources"); setSources(r.sources || r || []); }
+      try {
+        const r = await api("/api/sources");
+        const profs = r.profiles || {};
+        const kinds = Object.fromEntries((r.dialogs || []).map(d => [String(d.ref), d.kind]));
+        setProfiles(profs);
+        setSources((r.sources || []).map(ref => {
+          const p = profs[ref] || {};
+          return {
+            id: ref, chat_id: ref, name: p.title || ref,
+            type: kinds[ref] || (ref === "me" ? "saved" : "channel"),
+            auto_download: p.download_videos !== false, active: p.enabled !== false,
+          };
+        }));
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
     useEffect(() => { load(); }, []);
     async function add() {
+      const ref = form.chat_id.trim();
+      if (!ref) { onToast("Chat ID / username is required", "error"); return; }
+      if (!profiles) { onToast("Sources not loaded yet — refresh and try again", "error"); return; }
+      if (profiles[ref]) { onToast("That source is already configured", "error"); return; }
+      const next = [...Object.values(profiles), { ref, title: form.name.trim() || ref, download_videos: form.auto_download }];
       try {
-        await api("/api/sources", { method: "POST", body: JSON.stringify(form) });
+        await api("/api/sources", { method: "POST", body: JSON.stringify({ profiles: next }) });
         onToast("Source added"); setAdding(false); setForm({name:"",chat_id:"",type:"channel",auto_download:true}); load();
       } catch (e) { onToast(e.message, "error"); }
     }
@@ -2563,7 +2624,8 @@
       setLoading(true); setItem(null);
       try {
         const r = await api("/api/admin/review/studio");
-        setItem(r.item || r || null);
+        // Studio returns the whole prioritised queue; review it one item at a time.
+        setItem((r.items || [])[0] || null);
       } catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2626,14 +2688,15 @@
       catch (e) { onToast(e.message, "error"); }
     }
     async function loadMappings() {
-      try { const r = await api("/api/tags/mappings"); setMappings(typeof r === "string" ? r : JSON.stringify(r, null, 2)); }
+      try { const r = await api("/api/tags/mappings"); setMappings(JSON.stringify(r.mappings || {}, null, 2)); }
       catch (e) { onToast(e.message, "error"); }
     }
     useEffect(() => { loadSuggestions(); loadMappings(); }, []);
 
-    async function approve(id, canonical) {
+    async function approve(id, mergeInto) {
       try {
-        await api(`/api/tags/suggestions/${id}/approve`, { method: "POST", body: JSON.stringify({ canonical_tag: canonical || undefined }) });
+        // Backend reads `merge_into` (only honoured for an existing predefined tag); omit it to approve as-is.
+        await api(`/api/tags/suggestions/${id}/approve`, { method: "POST", body: JSON.stringify(mergeInto ? { merge_into: mergeInto } : {}) });
         onToast("Approved"); loadSuggestions();
       } catch (e) { onToast(e.message, "error"); }
     }
@@ -2645,7 +2708,7 @@
       setSavingMappings(true);
       try {
         const parsed = JSON.parse(mappings);
-        await api("/api/tags/mappings", { method: "POST", body: JSON.stringify(parsed) });
+        await api("/api/tags/mappings", { method: "POST", body: JSON.stringify({ mappings: parsed }) });
         onToast("Mappings saved");
       } catch (e) { onToast(e.message === "Unexpected token" ? "Invalid JSON" : e.message, "error"); }
       setSavingMappings(false);
@@ -2654,7 +2717,7 @@
       setMigrateConfirm(false);
       setMigrating(true);
       try {
-        await api("/api/tags/migrate", { method: "POST", body: JSON.stringify({ label_source: "ai_inferred" }) });
+        await api("/api/tags/migrate-labels", { method: "POST", body: JSON.stringify({ label_source: "ai_inferred" }) });
         onToast("Migration complete");
       } catch (e) { onToast(e.message, "error"); }
       setMigrating(false);
@@ -2681,10 +2744,10 @@
                 <div style={{fontWeight:600}}>{s.tag}</div>
                 <div style={{fontSize:12,color:"var(--muted)"}}>Suggested by {s.suggested_by || "user"} · {s.video_path || ""}</div>
               </div>
-              <button className="btn btn-primary btn-sm" onClick={() => approve(s.id, s.tag)}>Approve</button>
+              <button className="btn btn-primary btn-sm" onClick={() => approve(s.id)}>Approve</button>
               <button className="btn btn-secondary btn-sm" onClick={() => {
                 const canonical = prompt("Merge into existing tag (leave blank to approve as-is):", "");
-                if (canonical !== null) approve(s.id, canonical || s.tag);
+                if (canonical !== null) approve(s.id, canonical.trim() || undefined);
               }}>Merge</button>
               <button className="btn btn-danger btn-sm" onClick={() => reject(s.id)}>Reject</button>
             </div>
@@ -2725,7 +2788,11 @@
     useEffect(() => { load(); }, []);
     async function save() {
       setSaving(true);
-      try { await api("/api/admin/scoring", { method: "POST", body: JSON.stringify(scoring) }); onToast("Scoring saved"); }
+      try {
+        const body = { weights: scoring.weights, thresholds: scoring.thresholds, nudenet_threshold: scoring.nudenet_threshold };
+        await api("/api/admin/scoring", { method: "POST", body: JSON.stringify(body) });
+        onToast("Scoring saved");
+      }
       catch (e) { onToast(e.message, "error"); }
       setSaving(false);
     }
@@ -2735,22 +2802,40 @@
       catch (e) { onToast(e.message, "error"); }
     }
     if (!scoring) return <div style={{padding:24,color:"var(--muted)"}}>Loading…</div>;
-    const setS = (k, v) => setScoring(s => ({...s, [k]: v}));
+    // Payload: {weights:{tag:n}, thresholds:{tag:n}, bias:{tag:n}, tags:[...], nudenet_threshold:n}
+    const setTagVal = (group, tag, v) => setScoring(s => ({ ...s, [group]: { ...s[group], [tag]: v } }));
+    const tagList = scoring.tags || Object.keys(scoring.weights || {});
+    const num = e => { const n = parseFloat(e.target.value); return Number.isFinite(n) ? n : 0; };
     return (
       <div style={{padding:24}}>
         {resetConfirm && <ConfirmModal message="Reset scoring to defaults?" onConfirm={reset} onCancel={() => setResetConfirm(false)} confirmLabel="Reset" confirmClass="btn-warning" />}
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🎯 Scoring</div>
         <div style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:16,marginBottom:16}}>
-          {Object.entries(scoring).filter(([k]) => !k.startsWith("_")).map(([k, v]) => (
-            <div key={k} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-              <label style={{width:220,fontSize:13,color:"var(--muted)"}}>{k}</label>
-              <input className="field" type="number" step="0.01" value={v} onChange={e => setS(k, parseFloat(e.target.value)||0)} style={{width:100}} />
-            </div>
-          ))}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+            <label style={{width:220,fontSize:13,color:"var(--muted)"}}>NudeNet threshold (0.1–0.95)</label>
+            <input className="field" type="number" step="0.01" min={0.1} max={0.95} value={scoring.nudenet_threshold ?? ""} onChange={e => setScoring(s => ({...s, nudenet_threshold: num(e)}))} style={{width:100}} />
+          </div>
+          <table style={{width:"100%",fontSize:13,borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{color:"var(--muted)",textAlign:"left",borderBottom:"1px solid var(--border)"}}>
+                <th style={{padding:"4px 0"}}>Tag</th><th>Weight (0.1–3.0)</th><th>Threshold (0–1.5)</th><th>Feedback bias</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tagList.map(tag => (
+                <tr key={tag} style={{borderBottom:"1px solid var(--border)"}}>
+                  <td style={{padding:"5px 0"}}>{tag}</td>
+                  <td><input className="field" type="number" step="0.01" min={0.1} max={3} value={(scoring.weights || {})[tag] ?? ""} onChange={e => setTagVal("weights", tag, num(e))} style={{width:90}} /></td>
+                  <td><input className="field" type="number" step="0.01" min={0} max={1.5} value={(scoring.thresholds || {})[tag] ?? ""} onChange={e => setTagVal("thresholds", tag, num(e))} style={{width:90}} /></td>
+                  <td style={{color:"var(--muted)"}}>{(scoring.bias || {})[tag] ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>Save</button>
-          <button className="btn btn-secondary btn-sm" onClick={reset}>Reset Defaults</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setResetConfirm(true)}>Reset Defaults</button>
         </div>
       </div>
     );
@@ -2766,24 +2851,33 @@
     const setF = (k, v) => setForm(f => ({...f, [k]: v}));
     async function load() {
       setLoading(true);
-      try { const r = await api("/api/auth/users"); setUsers(r.users || r || []); }
+      try {
+        // There is no GET /api/auth/users; the user list lives in the security admin payload.
+        const r = await api("/api/auth/admin");
+        setUsers((r.users || []).map(u => ({ ...u, role: (u.groups || []).join(", "), active: !u.disabled })));
+      }
       catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
     useEffect(() => { load(); }, []);
+    const ROLE_GROUPS = { admin: ["Admin"], manager: ["Manager"], viewer: ["Users"] };
     async function create() {
       try {
-        await api("/api/auth/users", { method: "POST", body: JSON.stringify(form) });
+        const body = { username: form.username, password: form.password, groups: ROLE_GROUPS[form.role] || ["Users"] };
+        await api("/api/auth/users", { method: "POST", body: JSON.stringify(body) });
         onToast("User created"); setCreating(false); setForm({username:"",password:"",role:"viewer"}); load();
       } catch (e) { onToast(e.message, "error"); }
     }
-    async function disable(id) {
-      try { await api(`/api/auth/users/${id}`, { method: "PUT", body: JSON.stringify({ active: false }) }); onToast("Disabled"); load(); }
+    async function setDisabled(id, disabled) {
+      try {
+        await api(`/api/auth/users/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ disabled }) });
+        onToast(disabled ? "Disabled" : "Enabled"); load();
+      }
       catch (e) { onToast(e.message, "error"); }
     }
     async function del(id) {
       setDeleteUserId(null);
-      try { await api(`/api/auth/users/${id}`, { method: "DELETE" }); onToast("Deleted"); load(); }
+      try { await api(`/api/auth/users/${encodeURIComponent(id)}`, { method: "DELETE" }); onToast("Deleted"); load(); }
       catch (e) { onToast(e.message, "error"); }
     }
     return (
@@ -2820,7 +2914,7 @@
               <div style={{fontWeight:600}}>{u.username}</div>
               <div style={{fontSize:12,color:"var(--muted)"}}>{u.role || u.group} {u.active === false ? "· disabled" : ""}</div>
             </div>
-            {u.active !== false && <button className="btn btn-secondary btn-sm" onClick={() => disable(u.id || u.username)}>Disable</button>}
+            <button className="btn btn-secondary btn-sm" onClick={() => setDisabled(u.id || u.username, u.active !== false)}>{u.active !== false ? "Disable" : "Enable"}</button>
             <button className="btn btn-danger btn-sm" onClick={() => setDeleteUserId(u.id || u.username)}>Delete</button>
           </div>
         ))}
@@ -3013,7 +3107,13 @@
     useEffect(() => { load(); }, []);
     async function save() {
       setSaving(true);
-      try { await api("/api/admin/system", { method: "POST", body: JSON.stringify(settings) }); onToast("Settings saved"); }
+      try {
+        // Only send what this page edits. video_sources is managed on the Sources page; sending it
+        // from a text box would collapse the list into one malformed source.
+        const body = { auto_refresh: String(settings.auto_refresh), download_directory: settings.download_directory };
+        await api("/api/admin/system", { method: "POST", body: JSON.stringify(body) });
+        onToast("Settings saved");
+      }
       catch (e) { onToast(e.message, "error"); }
       setSaving(false);
     }
@@ -3023,19 +3123,21 @@
       <div style={{padding:24}}>
         <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🔧 System Settings</div>
         <div style={{background:"var(--panel-2)",borderRadius:"var(--radius)",padding:16,marginBottom:16}}>
-          {Object.entries(settings).filter(([k]) => !k.startsWith("_")).map(([k, v]) => (
-            <div key={k} style={{marginBottom:12}}>
-              <label className="field-label">{k.replace(/_/g," ")}</label>
-              {typeof v === "boolean" ? (
-                <label style={{display:"flex",gap:8,alignItems:"center",cursor:"pointer"}}>
-                  <input type="checkbox" checked={v} onChange={e => setS(k, e.target.checked)} style={{accentColor:"var(--accent)"}} />
-                  {v ? "Enabled" : "Disabled"}
-                </label>
-              ) : (
-                <input className="field" type={typeof v === "number" ? "number" : "text"} value={v == null ? "" : v} onChange={e => setS(k, typeof v === "number" ? (parseFloat(e.target.value)||0) : e.target.value)} />
-              )}
-            </div>
-          ))}
+          <div style={{marginBottom:12}}>
+            <label className="field-label">Auto refresh</label>
+            <select className="field" value={String(settings.auto_refresh)} onChange={e => setS("auto_refresh", e.target.value)}>
+              {["10","15","30","60"].map(v => <option key={v} value={v}>Every {v} minutes</option>)}
+              <option value="never">Never</option>
+            </select>
+          </div>
+          <div style={{marginBottom:12}}>
+            <label className="field-label">Download directory</label>
+            <input className="field" type="text" value={settings.download_directory || ""} onChange={e => setS("download_directory", e.target.value)} />
+          </div>
+          <div>
+            <label className="field-label">Video sources (edit on the Sources page)</label>
+            <div style={{fontSize:13,color:"var(--muted)"}}>{(settings.video_sources || []).join(", ") || "—"}</div>
+          </div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>Save Settings</button>
       </div>
@@ -3049,11 +3151,11 @@
     const [auditEntries, setAuditEntries] = useState(null);
     const [tab, setTab] = useState("logs");
     async function loadLogs() {
-      try { const r = await api("/api/admin/logs"); setLogs(typeof r === "string" ? r : JSON.stringify(r, null, 2)); }
+      try { const r = await api("/api/admin/logs"); setLogs(Array.isArray(r.lines) ? r.lines.join("\n") : (typeof r === "string" ? r : "")); }
       catch (e) { onToast(e.message, "error"); }
     }
     async function loadFeedback() {
-      try { const r = await api("/api/admin/feedback"); setFeedback(r.feedback || r || []); }
+      try { const r = await api("/api/admin/feedback"); setFeedback(Array.isArray(r.history) ? r.history : []); }
       catch (e) { onToast(e.message, "error"); }
     }
     async function loadAuditLog() {
