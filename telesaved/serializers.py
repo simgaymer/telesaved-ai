@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import logging
+from urllib.parse import quote
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
@@ -135,7 +136,8 @@ def serialize_item(item: dict) -> dict:
         **_deps["personal_state_for_path"](rel_path),
         "thumb_url": f"/thumbs/{_deps['thumb_rel_path_for_file'](rel_path)}",
         "preview_url": f"/previews/{_deps['preview_rel_path_for_file'](rel_path)}",
-        "file_url": f"/files/{rel_path}",
+        # quote(): a raw "#" or "?" in a filename would otherwise truncate the URL (<video src>, ▶ links).
+        "file_url": f"/files/{quote(rel_path)}",
         "ai_signals": ai_signals,
         "audio_language": audio_language,
         "display_tags": _deps["get_display_tags_for_signals"](ai_signals),
