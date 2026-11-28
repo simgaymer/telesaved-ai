@@ -3300,8 +3300,11 @@ def apply_review_studio_batch(paths, action, selected_tags=None, note=""):
     clean_paths = [str(path) for path in paths or [] if str(path) in tags]
     changed = 0
     failed = []
+    flags_resolved = False
     for rel_path in clean_paths:
         try:
+            if action in {"accept", "add_tags", "set_tags", "remove_tags"}:
+                flags_resolved = resolve_rule_review_flags(rel_path) or flags_resolved
             if action == "accept":
                 current = list(get_effective_tags(rel_path))
                 set_manual_override(rel_path, current, tags.get(rel_path, []))
@@ -3344,7 +3347,7 @@ def apply_review_studio_batch(paths, action, selected_tags=None, note=""):
             logger.exception("Review Studio batch action failed for %s", rel_path)
             failed.append({"path": rel_path, "error": str(e)})
     save_feedback()
-    if action in {"note", "trash"}:
+    if action in {"note", "trash"} or flags_resolved:
         save_state()
     return {"ok": True, "action": action, "requested": len(paths or []), "processed": len(clean_paths),
     "changed": changed, "failed": failed, "failed_count": len(failed)}
@@ -5120,6 +5123,21 @@ async def reprocess_selected_files_job(paths):
 def review_skip_map():
     skips = feedback_data.setdefault("review_skips", {})
     return skips if isinstance(skips, dict) else {}
+def resolve_rule_review_flags(rel_path):
+    """A human confirmed or edited this item's tags: retire its rule review flags.
+
+    review_reason_for_path() reports rule flags before it checks the manual override,
+    so without this an accepted Rule Flag item stays at the top of the queue forever.
+    Resolved flags are kept (capped) for audit. Returns True when any flag was cleared;
+    the caller must then save_state().
+    """
+    meta = metadata_store.get(rel_path)
+    if not isinstance(meta, dict) or not meta.get("rule_review_flags"):
+        return False
+    stamp = now_stamp()
+    resolved = [dict(flag, resolved_at=stamp) for flag in meta.pop("rule_review_flags") if isinstance(flag, dict)]
+    meta["rule_review_resolved"] = (resolved + list(meta.get("rule_review_resolved") or []))[:20]
+    return True
 def review_reason_for_path(rel_path):
     if rel_path not in tags:
         return []
@@ -8064,6 +8082,8 @@ async def api_item_tags_save(request):
     selected = sanitize_tags(selected)
     original_tags = list(tags.get(rel_path, []))
     set_manual_override(rel_path, selected, original_tags)
+    if resolve_rule_review_flags(rel_path):
+        save_state()
     # Write label_source rows for the user's tag changes.
     try:
         original_set = set(original_tags)
@@ -8218,6 +8238,8 @@ async def api_review_accept(request):
     set_manual_override(rel_path, current, tags.get(rel_path, []))
     review_skip_map().pop(rel_path, None)
     save_feedback()
+    if resolve_rule_review_flags(rel_path):
+        save_state()
     return web.json_response({"ok": True, "path": rel_path, "tags": current})
 @routes.post("/api/review/{path:.*}/skip")
 async def api_review_skip(request):

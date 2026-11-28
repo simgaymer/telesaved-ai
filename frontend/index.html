@@ -2615,8 +2615,22 @@
   }
 
   /* ─────────── AdminReviewStudio ─────────── */
+  // Each queue item carries why it was flagged (review_reasons/category/priority), the tags it currently
+  // has (`tags` — exactly what Accept locks in as a manual override) and the AI scores behind them.
+  const REVIEW_CATEGORY_HELP = {
+    "Missing File":   "The index points at a file that is no longer on disk.",
+    "Rule Flag":      "A tagging rule asked for a human to check this video.",
+    "Conflict":       "The tags contradict each other (e.g. both Clip and Movie, or more than one orientation).",
+    "No Tags":        "The video has no tags at all.",
+    "No AI Data":     "The AI has not scored this video yet, so its tags are unverified.",
+    "Low Confidence": "The AI's best guess for this video scored low, so its tags may be wrong.",
+    "General Review": "Flagged for a general check.",
+  };
+  const PRIORITY_CHIP = { Critical: "chip-red", High: "chip-orange", Medium: "chip-orange", Low: "chip-muted" };
+
   function AdminReviewStudio({ onToast, permissions }) {
     const [item, setItem] = useState(null);
+    const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
     const [acting, setActing] = useState(false);
 
@@ -2626,6 +2640,7 @@
         const r = await api("/api/admin/review/studio");
         // Studio returns the whole prioritised queue; review it one item at a time.
         setItem((r.items || [])[0] || null);
+        setSummary({ count: r.count || 0, skipped: r.skipped_count || 0, categories: r.categories || {} });
       } catch (e) { onToast(e.message, "error"); }
       setLoading(false);
     }
@@ -2636,34 +2651,108 @@
       setActing(true);
       try {
         await api(`/api/review/${encodeURIComponent(item.path)}/${action}`, { method: "POST" });
-        onToast(action === "accept" ? "Accepted ✓" : "Skipped");
+        onToast(action === "accept" ? "Tags confirmed ✓" : "Skipped — hidden from the queue");
         await loadNext();
       } catch (e) { onToast(e.message, "error"); }
       setActing(false);
     }
 
+    const tags = (item && item.tags) || [];
+    const category = (item && item.review_category) || "General Review";
+    const priority = (item && item.review_priority && item.review_priority.label) || "Low";
+    const missing = item && (category === "Missing File" || item.exists === false);
+    const scores = item ? Object.entries(item.score_map || {})
+      .map(([t, v]) => [t, Number(v) || 0]).sort((a, b) => b[1] - a[1]).slice(0, 6) : [];
+    const sectionLabel = {fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",color:"var(--muted)",marginBottom:6};
+
     return (
       <div style={{padding:24}}>
-        <div style={{fontWeight:700,fontSize:18,marginBottom:16}}>🔍 Review Studio</div>
+        <div style={{fontWeight:700,fontSize:18,marginBottom:6}}>🔍 Review Studio</div>
+        <div style={{fontSize:13,color:"var(--muted)",marginBottom:12,maxWidth:720}}>
+          Videos land here when their tags may be wrong or incomplete. For each one, check the tags below:
+          <b> Accept</b> confirms the current tags are correct and locks them in so the AI won't change them;
+          <b> Skip</b> leaves the tags as they are and hides the video from this queue.
+        </div>
+        {summary && summary.count > 0 && (
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16,fontSize:12,alignItems:"center"}}>
+            <span style={{fontWeight:600}}>{summary.count} to review{summary.skipped ? ` · ${summary.skipped} skipped` : ""}:</span>
+            {Object.entries(summary.categories).map(([c, n]) => <span key={c} className="chip chip-muted">{c} {n}</span>)}
+          </div>
+        )}
         {loading && <div style={{color:"var(--muted)"}}>Loading…</div>}
         {!loading && !item && (
           <div className="empty"><div className="empty-icon">✓</div><div className="empty-title">All caught up — nothing to review</div></div>
         )}
         {item && (
-          <div style={{maxWidth:600}}>
-            <img src={item.thumb_url} alt={item.filename} style={{width:"100%",borderRadius:"var(--radius)",marginBottom:12}} />
-            <div style={{fontWeight:600,marginBottom:4}}>{item.filename}</div>
-            <div style={{fontSize:12,color:"var(--muted)",marginBottom:10}}>
+          <div style={{maxWidth:720}}>
+            <div style={{border:"1px solid var(--warning)",borderRadius:"var(--radius)",padding:12,marginBottom:14,background:"rgba(224,155,46,0.08)"}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+                <span style={{fontWeight:700}}>Why it's here: {category}</span>
+                <span className={"chip " + (PRIORITY_CHIP[priority] || "chip-muted")}>{priority} priority</span>
+              </div>
+              <div style={{fontSize:13,marginBottom:6}}>{REVIEW_CATEGORY_HELP[category] || REVIEW_CATEGORY_HELP["General Review"]}</div>
+              {(item.review_reasons || []).length > 0 && (
+                <ul style={{margin:"0 0 6px 18px",padding:0,fontSize:12,color:"var(--muted)"}}>
+                  {item.review_reasons.map(r => <li key={r}>{r}</li>)}
+                </ul>
+              )}
+              {item.suggested_action && <div style={{fontSize:12}}>Suggested: <b>{item.suggested_action}</b></div>}
+            </div>
+
+            {missing
+              ? <img src={item.thumb_url} alt={item.filename} style={{width:"100%",borderRadius:"var(--radius)",marginBottom:12,opacity:.5}} />
+              : <video key={item.path} src={item.file_url} poster={item.thumb_url} controls preload="none"
+                  style={{width:"100%",maxHeight:420,background:"#000",borderRadius:"var(--radius)",marginBottom:12}} />}
+            <div style={{fontWeight:600,marginBottom:4,wordBreak:"break-all"}}>{item.filename}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:14}}>
               {item.size_human} · {fmt(item.duration)} · {item.source || "—"}
             </div>
-            {item.display_tags && item.display_tags.length > 0 && (
-              <div style={{marginBottom:10,display:"flex",flexWrap:"wrap",gap:6}}>
-                {item.display_tags.map(t => <span key={t} className="chip">{t}</span>)}
-              </div>
+
+            <div style={sectionLabel}>Current tags — what Accept will confirm</div>
+            <div style={{marginBottom:14,display:"flex",flexWrap:"wrap",gap:6}}>
+              {tags.length > 0
+                ? tags.map(t => <span key={t} className="chip">{t}</span>)
+                : <span style={{fontSize:13,color:"var(--warning)"}}>No tags — accepting would confirm this video has none. Use Edit Tags first.</span>}
+            </div>
+
+            {scores.length > 0 && (
+              <>
+                <div style={sectionLabel}>AI scores</div>
+                <div style={{display:"grid",gridTemplateColumns:"140px 1fr 48px",gap:"4px 10px",alignItems:"center",fontSize:12,marginBottom:14}}>
+                  {scores.map(([t, v]) => (
+                    <React.Fragment key={t}>
+                      <span>{t}{tags.includes(t) ? " ✓" : ""}</span>
+                      <div style={{height:6,background:"var(--panel-2)",borderRadius:3,overflow:"hidden"}}>
+                        <div style={{width:`${Math.round(Math.min(Math.max(v,0),1)*100)}%`,height:"100%",background:"var(--accent)"}} />
+                      </div>
+                      <span style={{textAlign:"right",color:"var(--muted)"}}>{Math.round(Math.min(Math.max(v,0),1)*100)}%</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </>
             )}
-            <div style={{display:"flex",gap:10,marginBottom:16}}>
-              <button className="btn btn-primary" style={{flex:1}} onClick={() => act("accept")} disabled={acting}>✓ Accept</button>
-              <button className="btn btn-secondary" style={{flex:1}} onClick={() => act("skip")} disabled={acting}>→ Skip</button>
+            {item.display_tags && item.display_tags.length > 0 && (
+              <>
+                <div style={sectionLabel}>Detected signals</div>
+                <div style={{marginBottom:14,display:"flex",flexWrap:"wrap",gap:6}}>
+                  {item.display_tags.map(t => <span key={t} className="chip chip-muted">{t}</span>)}
+                </div>
+              </>
+            )}
+
+            <div style={{display:"flex",gap:10,marginBottom:6}}>
+              <button className="btn btn-primary" style={{flex:1}} onClick={() => act("accept")} disabled={acting || missing || tags.length === 0}
+                title={missing ? "The file is missing — nothing to confirm" : tags.length === 0 ? "Add tags first" : "These tags are correct — lock them in"}>
+                ✓ Accept these tags
+              </button>
+              <button className="btn btn-secondary" style={{flex:1}} onClick={() => act("skip")} disabled={acting}
+                title="Leave the tags unchanged and hide this video from the queue">→ Skip</button>
+              <button className="btn btn-secondary" onClick={() => { window.location.hash = "#/item/" + encodeURIComponent(item.path); }}
+                title="Open the video page to change its tags">✎ Edit Tags</button>
+            </div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:16}}>
+              {missing ? "The file is missing, so there is nothing to accept. Skip it, or remove the stale entry from the index." :
+                "Wrong tags? Use Edit Tags to fix them on the video page — saving there also removes it from this queue."}
             </div>
             {permissions && permissions.includes("tags.manage") && (
               <SuggestTagInline path={encodeURIComponent(item.path)} onToast={onToast} />
