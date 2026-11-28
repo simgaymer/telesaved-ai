@@ -28,7 +28,7 @@ Completed bundle roadmap:
 
 Recommended next priorities:
 
-1. SSO/OIDC integration.
+1. ~~SSO/OIDC integration.~~ **Done** (unreleased, PR #8): OpenID Connect login with Authorization Code + PKCE, documented for Keycloak federating FreeIPA. See [OIDC.md](OIDC.md).
 2. CDN vendoring — bundle React/Babel/ReactDOM into `.deb` static assets (removes CDN dependency).
 3. Media Health and Repair Center.
 4. Performance optimization and scaling guidance (resource requirements per library size).
