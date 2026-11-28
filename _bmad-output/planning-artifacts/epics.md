@@ -1,13 +1,14 @@
 ---
 status: draft
 phase: 2
-baseline: "4.5.15 (branch baseline/v4.5.15, PR #5)"
+baseline: "4.5.15 (tag baseline/v4.5.15, promoted to main in PR #5)"
+statusCheckedAgainst: "main 57703cf, 2026-11-28"
 stepsCompleted: [step-01]
 inputDocuments:
   - docs/epics.md  # Phase 1 (done, shipped 4.5.0) — numbering continues from it
   - ARCHITECTURE.md  # backend architecture spine (AD-1…)
   - docs/SPEC-phase1-foundation-classification.md
-  - docs/ROADMAP.md  # next priorities: 1. SSO/OIDC, 2. CDN vendoring
+  - docs/ROADMAP.md  # listed priorities: 1. SSO/OIDC (shipped in PR #8), 2. CDN vendoring (open)
   - docs/USER_MANAGEMENT.md
   - docs/ACCESS_CONTROL.md
   - docs/ADVANCED_SEARCH.md
@@ -21,7 +22,9 @@ inputDocuments:
 
 This document provides the complete epic and story breakdown for telesaved-ai, decomposing the requirements from the PRD, UX Design if it exists, and Architecture requirements into implementable stories.
 
-**Phase 2 continues `docs/epics.md` (Phase 1, Epics 1–6, FR1–FR25, NFR1–NFR8, UX-DR1–UX-DR7, shipped 4.5.0).** Numbering continues from there: FR26+, NFR9+, UX-DR8+, Epic 7+. All `file:line` references are verified against the **4.5.15 baseline** (`baseline/v4.5.15`).
+**Phase 2 continues `docs/epics.md` (Phase 1, Epics 1–6, FR1–FR25, NFR1–NFR8, UX-DR1–UX-DR7, shipped 4.5.0).** Numbering continues from there: FR26+, NFR9+, UX-DR8+, Epic 7+. All `file:line` references are verified against the **4.5.15 baseline**, the tag `baseline/v4.5.15`; read them with `git show baseline/v4.5.15:<file>`. Line numbers on `main` have moved since, so find the named function there rather than trusting the number.
+
+**Status as of 2026-11-28 (`main` at `57703cf`).** Done: FR26 (PR #6). Delivered by a different route: FR60 (PR #8). Every other requirement is still open; where later work changed a requirement's context, the requirement carries a *Status* note.
 
 Goal: expose the 4.5.15 vault to invited friends (some technical, some not, mostly on phones) over the internet through Cloudflare Tunnel + Access. Nobody outside the invite list may reach anything, and no friend may see anything from a source they weren't granted.
 
@@ -31,7 +34,7 @@ Goal: expose the 4.5.15 vault to invited friends (some technical, some not, most
 
 **A. Security baseline and internet exposure**
 
-FR26: Restore `Secure` on the session cookie. It regressed in `1df2ce1` when `make_auth_response` moved to `telesaved/auth.py:402`. CHANGELOG 4.5.7 still claims it is set.
+FR26: ~~Restore `Secure` on the session cookie. It regressed in `1df2ce1` when `make_auth_response` moved to `telesaved/auth.py:402`. CHANGELOG 4.5.7 still claims it is set.~~ *Status: done in PR #6.* `make_auth_response` sets `Secure` when the request arrived over HTTPS, directly or via `X-Forwarded-Proto: https`, so plain-HTTP LAN installs keep working. Covered by `tests/test_auth_unit.py` and `tests/test_rbac_http.py`.
 FR27: The server binds to a configurable `bind_host`, default `127.0.0.1` (today `web.TCPSite(runner, "0.0.0.0", 8080)`, `app.py:8334`).
 FR28: The privacy-PIN token cookie is `HttpOnly` (today `httponly=False`, `app.py:6882`).
 FR29: Login throttling works per IP as well as per username. Today `_login_check_and_record_failure` keys on username only (`telesaved/auth.py:211`), and `api_auth_login` is at `app.py:5630`.
@@ -39,7 +42,7 @@ FR30: Privacy PIN unlock is throttled with temporary lockout (`api_privacy_unloc
 FR31: `/thumbs/`, `/previews/` and `/scenes/` fail closed for non-admins when the owning video can't be resolved. Today the ACL check runs only `if rel_guess:` (`app.py:8182`, `8217`, `8232`, `8247`).
 FR32: Responses carry security headers: CSP, `frame-ancestors`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options` (none today).
 FR33: The server validates the Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`): signature against the team keys, `aud`, `iss`, `exp`. It never trusts the plain email header.
-FR34: Just-in-time provisioning. A verified Access identity with no account becomes a user (`auth_backend: "cloudflare_access"`) in the default group with zero sources, following `sync_ldap_user` (`app.py:984`). 4.5.9 already removed the implicit `library.view` fallback in `normalize_permission_list`, so a zero-permission start is possible.
+FR34: Just-in-time provisioning. A verified Access identity with no account becomes a user (`auth_backend: "cloudflare_access"`) in the default group with zero sources, following `sync_ldap_user` (`app.py:984`). *Status: still open. PR #8's OIDC login already provisions users this way (`auto_create_users`, `default_groups`, a group mapping shared with LDAP), so reuse that path.* 4.5.9 already removed the implicit `library.view` fallback in `normalize_permission_list`, so a zero-permission start is possible.
 FR35: Newly provisioned users appear in a "Pending" panel on the admin dashboard with a one-tap "assign group" action, and the action is recorded in the audit log (4.5.11).
 FR36: When `access.sso_enabled` is on, a verified Access identity creates the TeleSaved session directly, with no second password. A local emergency admin login stays available.
 
@@ -50,7 +53,7 @@ FR38: Viewers (`library.view`) can read and write their own personal state (toda
 FR39: Viewers can read collections through an endpoint filtered by access (today `/api/collections` GET requires `admin.view`, `app.py:1188`). The owner can mark a collection "show as home shelf".
 FR40: Transcript search filters by `user_can_access_path` (`app.py:1128`) **before** matching. It returns segment index, start time and snippet from `transcript_segments` (`telesaved/audio.py:94`), and is available to `library.view`. Today `search_audio_transcripts` scans every item (`telesaved/audio.py:1181–1192`) and `/api/audio` requires `admin.view` (`app.py:1202`).
 FR41: The main library search can include transcript matches, returning per result the matched segment (time, text, hit offset).
-FR42: Restore granular search filters lost between 4.4.2 and 4.5.15: date / date range (`date_from`, `date_to`, `since`, `before`), watched, favorite, watch-later and personal state. 4.4.2's `parse_advanced_search_query` exists on `main:app.py` but not on 4.5.15, even though `docs/ADVANCED_SEARCH.md` still documents date ranges. Keep 4.5.x's `audio_language`, `scene_composition`, `performer_presentation`, `size_*` and `duration_*` filters.
+FR42: Restore granular search filters lost between 4.4.2 and 4.5.15: date / date range (`date_from`, `date_to`, `since`, `before`), watched, favorite, watch-later and personal state. 4.4.2's `parse_advanced_search_query` exists in 4.4.2 (`51e63e4`, the old `main` before PR #5) but not in 4.5.15 or today's `main`, even though `docs/ADVANCED_SEARCH.md` still documents date ranges. Keep 4.5.x's `audio_language`, `scene_composition`, `performer_presentation`, `size_*` and `duration_*` filters.
 FR43: Every video has a stable opaque ID that survives rename and move.
 FR44: Deep links use `#/w/<id>` (or `/w/<id>`) instead of `#/item/<encoded path>` (today `frontend/index.html:2940–2956`, `1503`), so file paths never appear in URLs, history or shared links. Unknown, deleted or forbidden IDs all return the same generic "not shared with you" response.
 FR45: The owner chooses which Details fields friends can see. Telegram post/message ID and file path are hidden from non-admins by default.
@@ -74,11 +77,11 @@ FR59: A "This one isn't shared with you" screen shows no title, thumbnail or sou
 
 **D. Later / optional**
 
-FR60: FreeIPA directory → OIDC bridge (Authentik or Keycloak) → Cloudflare Access. Group claims in the Access JWT map to TeleSaved groups on login (ROADMAP priority 1: SSO/OIDC).
+FR60: FreeIPA directory → OIDC bridge (Authentik or Keycloak) → Cloudflare Access. Group claims in the Access JWT map to TeleSaved groups on login (ROADMAP priority 1: SSO/OIDC). *Status: delivered by a different route in PR #8. TeleSaved is now an OIDC client of Keycloak federating FreeIPA (`telesaved/oidc.py`, `docs/OIDC.md`), and IdP group claims map to TeleSaved groups. What remains is only the Access leg: if Cloudflare Access also sits in front (FR33–FR36), decide whether Access uses the same Keycloak as its IdP and whether TeleSaved trusts the Access JWT or keeps its own OIDC login.*
 
 ### NonFunctional Requirements
 
-NFR9: Zero exposure. No video, thumbnail, preview, scene, transcript text, title or metadata reaches a user without access to its source. This is enforced server-side, with an automated test per media and search endpoint.
+NFR9: Zero exposure. No video, thumbnail, preview, scene, transcript text, title or metadata reaches a user without access to its source. This is enforced server-side, with an automated test per media and search endpoint. *Status: partly in place. The pytest suite and CI (PRs #6–#7) cover source ACL for `/files/`, `/thumbs/`, `/previews/` and `/scenes/`, plus library, Librarian and similar-item filtering, and `tests/test_route_coverage.py` pins a reviewed permission for every route. Transcript search (FR40) and the gaps in FR31 are not covered yet.*
 NFR10: No runtime CDN or in-browser Babel. React production builds are vendored and JSX is precompiled, so the UI boots with no internet egress (ROADMAP priority 2; today unpkg React 18.3.1 **development** builds plus `@babel/standalone` 8.0.4, `frontend/index.html:8–16`).
 NFR11: The Viewer home is interactive in ≤ 3 s on a mid-range phone over 4G (Lighthouse mobile).
 NFR12: Accessibility: touch targets ≥ 44 px, WCAG 2.1 AA contrast, labels on every icon-only control, real buttons and inputs (today 3 `aria-`/`role` attributes in `frontend/index.html`).
@@ -93,11 +96,11 @@ NFR19: Phase 1 NFR5 still applies. All new endpoints enforce RBAC (401/403) thro
 ### Additional Requirements
 
 - **Baseline:** 4.5.15 modular monolith per `ARCHITECTURE.md`. Shared state is owned by `telesaved/state.py` (AD-1). Imports flow downward only (AD-2). New auth code goes in `telesaved/auth.py`; new search code respects the `pipeline.py` / `audio.py` boundaries.
-- **Before any internet exposure:** review `1df2ce1` (21 files, +5,085/−2,589, 4.5.9–4.5.15 squashed). Its known regression is FR26.
+- **Before any internet exposure:** review `1df2ce1` (21 files, +5,085/−2,589, 4.5.9–4.5.15 squashed). Two regressions from it are known and fixed in PR #6: the `Secure` cookie (FR26) and the local-login 500 caused by missing `_LOGIN_*` aliases. The rest of the squash has not been reviewed.
 - Auth path: `auth_middleware` (`app.py:1222`), `required_permission_for_request` (`app.py:1169`), `privacy_middleware` (`app.py:1380`). ACL helpers: `user_can_access_path` (`app.py:1128`), `require_source_access_response` (`app.py:1164`), `accessible_source_refs_for_user` (`app.py:1096`).
 - The audit log (4.5.11, `telesaved/state.py` `append_audit_log`) records provisioning, group assignment and visibility changes.
-- 4.4.2's search parser can be recovered from git history (`git show main:app.py`, `parse_advanced_search_query`) for FR42.
-- Frontend: one `frontend/index.html` (3,136 lines) with `App()` hash router (`:2961`, `:2940`). The build step (NFR10) comes before UI stories. `build-telesaved-deb.sh` and `scripts/install-telesaved-venv.sh` must ship the built assets.
+- 4.4.2's search parser can be recovered from git history (`git show 51e63e4:app.py`, `parse_advanced_search_query`) for FR42. `main` is 4.5.x now, so `main:app.py` no longer has it.
+- Frontend: one `frontend/index.html` (3,136 lines at the baseline, 3,339 on `main` today) with `App()` hash router (`:2961`, `:2940`). The build step (NFR10) comes before UI stories. `build-telesaved-deb.sh` and `scripts/install-telesaved-venv.sh` must ship the built assets.
 - Deployment: `cloudflared` tunnel plus an Access app with an email allowlist and one-time-PIN login. New config keys: `bind_host`, `cookie_secure`, `access.team_domain`, `access.aud`, `access.sso_enabled`.
 - Packaging already ships `telesaved-telegram-login` (`build-telesaved-deb.sh:457`). `scripts/telegram-login.py` covers venv installs.
 - Future infrastructure: Proxmox homelab (offline for now) with FreeIPA, Jellyfin, Stirling PDF and production TeleSaved.
